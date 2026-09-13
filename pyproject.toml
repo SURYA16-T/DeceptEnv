@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deceptenv"
+version = "0.1.0"
+description = "High-security architecture for tripwires and threat mitigation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=5.9.8",
+    "watchdog>=4.0.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "mypy",
+    "ruff"
+]
+
+[project.scripts]
+deceptenv = "deceptenv.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deceptenv"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = [
+    "tests",
+]
+
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "S", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S108", "S603", "E501"]
