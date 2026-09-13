@@ -177,6 +177,34 @@ class WindowsAdapter(PlatformAdapter):
         finally:
             rstrtmgr.RmEndSession(session_handle)
 
+        # TIER 2: Heuristic Fallback for short-lived access
+        import time
+        import psutil
+        best_pid = None
+        highest_time = 0.0
+        current_time = time.time()
+        
+        current_sid = self._get_current_user_sid()
+        for p in psutil.process_iter(['pid', 'create_time']):
+            try:
+                pid = p.info.get('pid') # type: ignore
+                create_time = p.info.get('create_time') # type: ignore
+                
+                if not pid or not create_time:
+                    continue
+                    
+                if self.get_process_owner(int(pid)) == current_sid and pid != __import__("os").getpid():
+                    # If spawned within the last 5 seconds (fast-close evasion window)
+                    if current_time - create_time < 5.0:
+                        if create_time > highest_time:
+                            highest_time = create_time
+                            best_pid = pid
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                pass
+                
+        if best_pid:
+            return best_pid
+
         return None
 
     def _verify_ownership(self, pid: int) -> None:

@@ -70,7 +70,7 @@ DeceptEnv operates entirely in user space by using platform-specific OS APIs:
 
 | Subsystem | Linux | Windows | macOS |
 | :--- | :--- | :--- | :--- |
-| **Filesystem Telemetry** | `inotify` via standard `libc` | `ReadDirectoryChangesW` (Win32) | `FSEvents` / `kqueue` |
+| **Filesystem Telemetry** | `inotify` via standard `libc` | Hybrid `st_atime` polling | Hybrid `st_atime` polling |
 | **PID Attribution** | `/proc/[pid]/fd` descriptor match | Restart Manager (`rstrtmgr.dll`) | `libproc` / open file descriptors |
 | **Execution Suspension** | `os.kill(pid, signal.SIGSTOP)` | `ntdll.NtSuspendProcess` | `os.kill(pid, signal.SIGSTOP)` |
 | **Privilege Ceiling** | Standard User (UID != 0) | Medium Integrity (Non-Admin) | Standard User (Non-wheel) |

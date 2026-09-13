@@ -110,7 +110,7 @@ class ForensicsExtractor:
         
         try:
             proc = psutil.Process(pid)
-            conns = proc.connections(kind="inet")
+            conns = proc.net_connections(kind="inet")
             for c in conns:
                 if c.raddr:
                     report.network_sockets.append(

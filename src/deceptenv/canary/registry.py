@@ -55,3 +55,8 @@ class CanaryRegistry:
             resolved = path.resolve()
             if resolved in self._canaries:
                 del self._canaries[resolved]
+
+    def get_all_paths(self) -> list[Path]:
+        """Return a list of all currently tracked canary paths."""
+        with self._lock:
+            return list(self._canaries.keys())
