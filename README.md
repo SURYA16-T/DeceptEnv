@@ -7,6 +7,7 @@ By leveraging OS-level process ownership rules, DeceptEnv traps unauthorized cre
 ## The Problem: The User-Space EDR Blindspot
 
 Modern infostealers do not attempt privilege escalation. They deliberately run under standard user permissions, harvesting sensitive files directly from the user's home directory:
+
 - **Cloud configurations**: `~/.aws/credentials`, `~/.config/gcloud/`
 - **Browser vaults**: Chrome/Edge/Brave SQLite Cookies and Login Data
 - **Developer secrets**: `~/.ssh/id_rsa`, `.env` workspace variables
@@ -85,6 +86,7 @@ DeceptEnv operates entirely in user space by using platform-specific OS APIs:
 ## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - Linux, Windows 10/11, or macOS 13+
 
