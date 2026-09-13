@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # DeceptEnv: Zero-Privilege Active Defense & Infostealer Neutralization Engine
 
 DeceptEnv is a cross-platform, unprivileged endpoint defense daemon designed to detect, attribute, and freeze infostealer malware (e.g., LummaC2, Stealc, Vidar, RedLine) in sub-millisecond execution windows.
@@ -91,6 +92,7 @@ DeceptEnv operates entirely in user space by using platform-specific OS APIs:
 - Linux, Windows 10/11, or macOS 13+
 
 ### Installation
+
 ```bash
 # Clone repository
 git clone https://github.com/your-username/deceptenv.git
@@ -105,11 +107,15 @@ pip install -e ".[dev]"
 ```
 
 ### 1. Initialize Canary Traps
+
 Deploys decoy tripwire files across system locations:
+
 ```bash
 deceptenv init
 ```
+
 **Output:**
+
 ```text
 [+] Canary Deployment Successful:
   ├── AWS Honeytoken:        ~/.aws/credentials.honey
@@ -119,10 +125,13 @@ deceptenv init
 ```
 
 ### 2. Launch the Active Protection Daemon
+
 Starts the event loop and monitoring engine:
+
 ```bash
 deceptenv run
 ```
+
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │                    DeceptEnv Telemetry Console               │
@@ -138,6 +147,7 @@ deceptenv run
 DeceptEnv includes a safe, unprivileged attack simulator that reproduces infostealer credential targeting.
 
 Open a second terminal window and run:
+
 ```bash
 python tests/simulation/attack_simulator.py
 ```
@@ -145,6 +155,7 @@ python tests/simulation/attack_simulator.py
 ### Observed Execution Split
 
 **Terminal 2 (Attack Simulator Output):**
+
 ```text
 [SIMULATOR] Starting simulated credential harvesting...
 [SIMULATOR] Discovered target: /home/user/.aws/credentials.honey
@@ -153,6 +164,7 @@ python tests/simulation/attack_simulator.py
 ```
 
 **Terminal 1 (DeceptEnv Defense Console):**
+
 ```text
 [!] TRIPWIRE ACCESSED: /home/user/.aws/credentials.honey
 [*] Resolving offending process handle...
@@ -171,6 +183,7 @@ python tests/simulation/attack_simulator.py
 ## Forensic Artifact Schema
 
 Forensic telemetry dumps are written to `~/.deceptenv/forensics/incident_.json`:
+
 ```json
 {
   "timestamp": "2026-09-13T16:08:22Z",
@@ -208,6 +221,7 @@ Forensic telemetry dumps are written to `~/.deceptenv/forensics/incident_.json`:
 ## Development & Quality Assurance
 
 Run the test suite, linting, and type verification:
+
 ```bash
 # Run unit and integration tests
 pytest tests/ -v --cov=src/deceptenv
@@ -220,7 +234,9 @@ ruff check src/
 ```
 
 ## License
+
 Distributed under the MIT License. See LICENSE for details.
 
 ## Disclaimer
+
 DeceptEnv is built for defensive threat mitigation, behavioral process auditing, and educational security research. Ensure proper authorization before testing in managed or production environments and with AI build in Antigravity.

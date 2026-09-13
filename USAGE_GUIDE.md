@@ -1,8 +1,9 @@
+<!-- markdownlint-disable MD013 -->
 # DeceptEnv: Complete Usage & Architecture Guide
 
 ## 🌟 What is DeceptEnv? (How it works & Why it's helpful)
 
-DeceptEnv is a **zero-privilege active defense engine** designed to hunt and neutralize **Infostealers** (like RedLine, Raccoon, or Vidar). 
+DeceptEnv is a **zero-privilege active defense engine** designed to hunt and neutralize **Infostealers** (like RedLine, Raccoon, or Vidar).
 
 Infostealers are a specific type of malware that try to steal your browser cookies, cryptocurrency wallets, and cloud credentials (like AWS keys). Because they do this using completely normal file-read operations, traditional Anti-Viruses and EDRs often miss them or require heavy kernel-level access to stop them.
 
@@ -49,7 +50,7 @@ DeceptEnv is fully cross-platform and adapts to the OS it is running on automati
   - AWS: `~/.aws/credentials.honey`
   - System: `~/Library/Preferences/com.apple.deceptenv.sys.plist.honey`
 - **Under the hood:** Uses `FSEvents` for monitoring and `SIGSTOP` signals to instantly freeze malware threads.
-- **How to test:** 
+- **How to test:**
 
   ```bash
   # Open two terminals
@@ -68,7 +69,7 @@ DeceptEnv is fully cross-platform and adapts to the OS it is running on automati
   - AWS: `~/.aws/credentials.honey`
   - System: `~/.config/deceptenv/system.conf.honey`
 - **Under the hood:** Uses `inotify` for file monitoring and `SIGSTOP` for mitigation. Safely extracts memory from `/proc/[pid]/mem`.
-- **How to test:** 
+- **How to test:**
 
   ```bash
   # Open two terminals
@@ -86,7 +87,7 @@ DeceptEnv is fully cross-platform and adapts to the OS it is running on automati
   - AWS: `%USERPROFILE%\.aws\credentials.honey`
   - System: `%APPDATA%\Microsoft\Windows\deceptenv_config.ini.honey`
 - **Under the hood:** Uses `ReadDirectoryChangesW` for zero-overhead monitoring. Uses the powerful `NtSuspendProcess` undocumented API call to freeze the malware's threads without needing Administrator privileges.
-- **How to test (PowerShell):** 
+- **How to test (PowerShell):**
 
   ```powershell
   # Open two PowerShell windows
