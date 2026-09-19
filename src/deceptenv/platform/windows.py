@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import platform
 from ctypes import wintypes
 from pathlib import Path
@@ -14,10 +15,10 @@ from .base import PlatformAdapter
 logger = logging.getLogger(__name__)
 
 if platform.system() == "Windows":
-    rstrtmgr = ctypes.windll.Rstrtmgr  # type: ignore
-    kernel32 = ctypes.windll.kernel32  # type: ignore
-    advapi32 = ctypes.windll.advapi32  # type: ignore
-    ntdll = ctypes.windll.ntdll  # type: ignore
+    rstrtmgr = ctypes.windll.Rstrtmgr  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    advapi32 = ctypes.windll.advapi32  # type: ignore[attr-defined]
+    ntdll = ctypes.windll.ntdll  # type: ignore[attr-defined]
 else:
     rstrtmgr = None
     kernel32 = None
@@ -69,10 +70,16 @@ class WindowsAdapter(PlatformAdapter):
     """Windows specific OS primitives."""
 
     def get_target_canary_paths(self) -> dict[str, Path]:
+        from deceptenv.canary.deployer import CanaryDeployer
+
         config = load_config()
         return {
-            "dummy_file": config.canary_directory / "passwords.txt",
-            "dummy_db": config.canary_directory / "wallet.dat",
+            "aws_credentials": CanaryDeployer.get_aws_credentials_path(),
+            "chrome_cookies": CanaryDeployer.get_chrome_cookies_path(
+                config.canary_directory
+            ),
+            "system_config": CanaryDeployer.get_system_config_path(),
+            "env_file": CanaryDeployer.get_env_file_path(config.canary_directory),
         }
 
     def _get_current_user_sid(self) -> str:
@@ -96,7 +103,9 @@ class WindowsAdapter(PlatformAdapter):
                 return ""
 
             cbSize = wintypes.DWORD(0)
-            advapi32.GetTokenInformation(hToken, TokenUser, None, 0, ctypes.byref(cbSize))
+            advapi32.GetTokenInformation(
+                hToken, TokenUser, None, 0, ctypes.byref(cbSize)
+            )
 
             if cbSize.value == 0:
                 return ""
@@ -111,10 +120,12 @@ class WindowsAdapter(PlatformAdapter):
                 TokenInformation, ctypes.POINTER(TOKEN_USER)
             ).contents
             sid_str_ptr = ctypes.c_wchar_p()
-            
-            if advapi32.ConvertSidToStringSidW(token_user.User.Sid, ctypes.byref(sid_str_ptr)):
+
+            if advapi32.ConvertSidToStringSidW(
+                token_user.User.Sid, ctypes.byref(sid_str_ptr)
+            ):
                 sid = sid_str_ptr.value
-                kernel32.LocalFree(sid_str_ptr)
+                kernel32.LocalFree(ctypes.cast(sid_str_ptr, ctypes.c_void_p))
                 return str(sid)
         finally:
             if hToken:
@@ -156,7 +167,7 @@ class WindowsAdapter(PlatformAdapter):
                 ctypes.byref(dwReason),
             )
 
-            if err == ERROR_MORE_DATA or err == ERROR_SUCCESS:
+            if err in (ERROR_MORE_DATA, ERROR_SUCCESS):
                 if nProcInfoNeeded.value > 0:
                     process_info_array = (RM_PROCESS_INFO * nProcInfoNeeded.value)()
                     nProcInfo.value = nProcInfoNeeded.value
@@ -179,21 +190,26 @@ class WindowsAdapter(PlatformAdapter):
 
         # TIER 2: Heuristic Fallback for short-lived access
         import time
+
         import psutil
+
         best_pid = None
         highest_time = 0.0
         current_time = time.time()
-        
+
         current_sid = self._get_current_user_sid()
-        for p in psutil.process_iter(['pid', 'create_time']):
+        for p in psutil.process_iter(["pid", "create_time"]):
             try:
-                pid = p.info.get('pid') # type: ignore
-                create_time = p.info.get('create_time') # type: ignore
-                
+                pid = int(p.info.get("pid") or 0)
+                create_time = p.info.get("create_time")
+
                 if not pid or not create_time:
                     continue
-                    
-                if self.get_process_owner(int(pid)) == current_sid and pid != __import__("os").getpid():
+
+                if (
+                    self.get_process_owner(pid) == current_sid
+                    and pid != os.getpid()
+                ):
                     # If spawned within the last 5 seconds (fast-close evasion window)
                     if current_time - create_time < 5.0:
                         if create_time > highest_time:
@@ -201,7 +217,7 @@ class WindowsAdapter(PlatformAdapter):
                             best_pid = pid
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 pass
-                
+
         if best_pid:
             return best_pid
 
@@ -227,7 +243,7 @@ class WindowsAdapter(PlatformAdapter):
 
         try:
             status = ntdll.NtSuspendProcess(hProcess)
-            return status == 0
+            return bool(status == 0)
         finally:
             kernel32.CloseHandle(hProcess)
 
@@ -243,6 +259,6 @@ class WindowsAdapter(PlatformAdapter):
 
         try:
             status = ntdll.NtResumeProcess(hProcess)
-            return status == 0
+            return bool(status == 0)
         finally:
             kernel32.CloseHandle(hProcess)

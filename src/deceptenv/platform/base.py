@@ -6,7 +6,7 @@ from pathlib import Path
 
 class PlatformAdapter(ABC):
     """Abstract Base Class defining secure OS primitives."""
-    
+
     @abstractmethod
     def get_target_canary_paths(self) -> dict[str, Path]:
         """Return a mapping of canary identifiers to their deployed Paths."""
@@ -30,13 +30,14 @@ class PlatformAdapter(ABC):
     def get_process_lineage(self, pid: int) -> list[int]:
         """Get the process tree lineage of a given PID."""
         import psutil
+
         lineage = []
         try:
             proc = psutil.Process(pid)
-            while proc.parent():
-                proc = proc.parent()
-                if proc:
-                    lineage.append(proc.pid)
+            parent = proc.parent()
+            while parent:
+                lineage.append(parent.pid)
+                parent = parent.parent()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
         return lineage

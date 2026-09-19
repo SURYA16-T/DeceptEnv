@@ -10,9 +10,10 @@ from deceptenv.platform import get_platform_adapter
 
 logger = logging.getLogger(__name__)
 
+
 class CanaryMonitor:
-    """High-throughput async filesystem polling loop for true read-access tripwire monitoring."""
-    
+    """High-throughput async filesystem polling loop for true read-access tripwires."""
+
     def __init__(self, directory: Path, registry: CanaryRegistry) -> None:
         self.directory = directory
         self.registry = registry
@@ -20,9 +21,11 @@ class CanaryMonitor:
         self.queue: asyncio.Queue[Path] = asyncio.Queue()
         self.debouncer: dict[Path, float] = {}
         self.debounce_seconds = 1.0
-        
+
         # We monitor specific deployed paths directly to ensure we catch reads
-        self.canary_paths = [path.resolve() for path in self.platform.get_target_canary_paths().values()]
+        self.canary_paths = [
+            path.resolve() for path in self.platform.get_target_canary_paths().values()
+        ]
         # Also add any explicitly registered canaries from the registry
         for path in self.registry.get_all_paths():
             self.canary_paths.append(path.resolve())
@@ -32,12 +35,14 @@ class CanaryMonitor:
 
     async def _poll_access(self) -> None:
         """Polls st_atime for true file access (zero-privilege)."""
-        logger.debug(f"Monitor checking {len(self.canary_paths)} paths: {self.canary_paths}")
+        logger.debug(
+            f"Monitor checking {len(self.canary_paths)} paths: {self.canary_paths}"
+        )
         # Initialize atime cache
         for path in self.canary_paths:
             if path.exists():
                 self._atime_cache[path] = os.stat(path).st_atime
-                
+
         while True:
             for path in self.canary_paths:
                 if not path.exists():
@@ -45,9 +50,12 @@ class CanaryMonitor:
                 try:
                     current_atime = os.stat(path).st_atime
                     cached_atime = self._atime_cache.get(path)
-                    
+
                     if cached_atime is not None and current_atime > cached_atime:
-                        logger.debug(f"Atime change detected on {path}: {cached_atime} -> {current_atime}")
+                        logger.debug(
+                            f"Atime change detected on {path}: "
+                            f"{cached_atime} -> {current_atime}"
+                        )
                         # Atime changed = file was read!
                         self._atime_cache[path] = current_atime
                         self.queue.put_nowait(path)
@@ -63,16 +71,16 @@ class CanaryMonitor:
     ) -> None:
         while True:
             full_path = await self.queue.get()
-            
+
             # Check debouncer
             now = time.time()
             last_seen = self.debouncer.get(full_path, 0.0)
             if now - last_seen < self.debounce_seconds:
                 self.queue.task_done()
                 continue
-                
+
             self.debouncer[full_path] = now
-            
+
             # We defer to the mitigator logic securely
             triggering_pid = self.platform.find_pid_accessing_file(full_path)
             if triggering_pid:
@@ -80,18 +88,18 @@ class CanaryMonitor:
                 asyncio.create_task(mitigator_callback(triggering_pid, full_path))
             else:
                 logger.warning(f"Could not attribute PID for read on {full_path}")
-                
+
             self.queue.task_done()
 
     async def start(
         self, mitigator_callback: Callable[[int, Path], Coroutine[Any, Any, None]]
     ) -> None:
         """Start the async polling loop to monitor read-access events."""
-        logger.info(f"Starting read-access monitor on deployed canaries.")
-        
+        logger.info("Starting read-access monitor on deployed canaries.")
+
         poll_task = asyncio.create_task(self._poll_access())
         process_task = asyncio.create_task(self._process_events(mitigator_callback))
-        
+
         try:
             await asyncio.gather(poll_task, process_task)
         except asyncio.CancelledError:

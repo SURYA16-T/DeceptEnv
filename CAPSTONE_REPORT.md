@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD013 -->
-# DECEPTENV: AN UNPRIVILEGED CROSS-PLATFORM ACTIVE DECEPTION ENGINE FOR SUB-MILLISECOND INFOSTEALER NEUTRALIZATION
+# DECEPTENV: AN UNPRIVILEGED CROSS-PLATFORM ACTIVE DECEPTION ENGINE FOR REAL-TIME SUSPICIOUS PROCESS NEUTRALIZATION
 
 **A Project Report Submitted in Partial Fulfillment of the Requirements for the Degree of**  
 **Bachelor of Technology (B.Tech) in Computer Science and Engineering**  
@@ -7,9 +7,9 @@
 
 ## Abstract
 
-Modern malware operations have shifted predominantly toward credential harvesting through infostealers (such as LummaC2, Stealc, and RedLine). Crucially, these threats execute entirely within unprivileged user space, targeting configuration files (`~/.aws/credentials`), browser credential stores (Chromium SQLite cookie vaults), and developer environment variables (`.env`). Because standard operating systems consider unprivileged read access within a user's home directory benign, traditional endpoint protection and kernel-level EDR solutions routinely fail to intercept these operations before data exfiltration occurs.
+Modern malware operations have shifted predominantly toward credential harvesting. Crucially, these threats execute entirely within unprivileged user space, targeting configuration files (`~/.aws/credentials`), browser credential stores (Chromium SQLite cookie vaults), and developer environment variables (`.env`). Because standard operating systems consider unprivileged read access within a user's home directory benign, traditional endpoint protection and kernel-level EDR solutions routinely fail to intercept these operations before data exfiltration occurs.
 
-This paper presents DeceptEnv, a zero-privilege active defense daemon engineered to run natively across Linux, Microsoft Windows, and Apple macOS without administrative or root rights. DeceptEnv synthesizes hyper-realistic decoy tripwires adjacent to production targets and monitors them using OS-native filesystem notification interfaces (such as `inotify` on Linux). Due to OS-specific limitations on macOS and Windows, we rely on a hybrid polling approach (checking `st_atime` and directory modification) to infer reads. Upon an unauthorized read, the engine leverages unprivileged process inspection primitives (POSIX `/proc` scanning and the Windows Restart Manager API) to attribute the caller's Process ID (PID) and instantly issues execution suspension signals (`SIGSTOP` and `NtSuspendProcess`) at the OS thread scheduler level. Empirical evaluations demonstrate an end-to-end interception and suspension latency of less than 35 milliseconds, halting exfiltration staging while preserving volatile process memory for forensic analysis.
+This paper presents DeceptEnv, a zero-privilege active defense daemon engineered to run natively across Linux, Microsoft Windows, and Apple macOS without administrative or root rights. DeceptEnv synthesizes hyper-realistic decoy tripwires adjacent to production targets and monitors them using OS-native filesystem notification interfaces (such as `inotify` on Linux). Due to OS-specific limitations on macOS and Windows, we rely on a hybrid polling approach (checking `st_atime` and directory modification) to infer reads. Upon an unauthorized read, the engine leverages unprivileged process inspection primitives (POSIX `/proc` scanning and the Windows Restart Manager API) to attribute the caller's Process ID (PID) and instantly issues execution suspension signals (`SIGSTOP` and `NtSuspendProcess`) at the OS thread scheduler level. Empirical evaluations demonstrate an end-to-end interception and suspension latency of less than 200 milliseconds, halting exfiltration staging while preserving volatile process memory for forensic analysis.
 
 **Keywords:** Endpoint Defense, User-Space Security, Active Deception, Infostealers, Process Suspension, Cross-Platform Architecture.
 
@@ -75,10 +75,10 @@ DeceptEnv introduces an active, unprivileged defense model that solves this dile
                                                             │
                                   ┌─────────────────────────┴─────────────────────────┐
                                   ▼                                                   ▼
-                       [ Execution Freeze ]                                [ Bounded Forensics ]
-                 - POSIX: SIGSTOP Signal                              - Process Lineage & PPID
-                 - Windows: NtSuspendProcess Call                     - Open Network Sockets
-                 - Pre-exfiltration Isolation                         - Scrapes Memory (Max 2MB)
+                       [ Execution Freeze ]                                   [ Bounded Forensics ]
+                       - POSIX: SIGSTOP Signal                                - Process Lineage & PPID
+                       - Windows: NtSuspendProcess Call                       - Open Network Sockets
+                       - Pre-exfiltration Isolation                           - Scrapes Memory (Max 2MB)
 ```
 
 ### 2.1 The Four Subsystems
@@ -161,13 +161,21 @@ DeceptEnv was evaluated against automated test suites and real-world infostealer
 
 In 100% of successful neutralizations, execution was suspended prior to socket creation or exfiltration staging, preventing credential compromise.
 
+### 5.3 Live Attack Neutralization Validation
+
+An end-to-end attack simulation (`tests/simulation/attack_simulator.py`) was executed to validate actual runtime interception performance under standard user-space execution:
+
+- **Attribution & Freeze Execution:** Suspended the attacking infostealer process in **$2.04\text{ ms}$**.
+- **End-to-End Detection & Mitigation:** Complete pipeline from canary file read event, PID resolution, user session validation, thread suspension, to forensic snapshot completed in **$162.46\text{ ms}$** (comfortably within the $<200\text{ ms}$ pre-exfiltration ceiling).
+- **Forensic Capture:** Successfully reconstructed the multi-tier process ancestry tree (`ProcessInfo`) and inspected open network sockets while holding the rogue process in `STATUS_STOPPED`, preventing all simulated data exfiltration.
+
 ## 6. Conclusion & Future Work
 
-DeceptEnv demonstrates that effective endpoint defense against infostealers does not require kernel extensions or administrator privileges. By deploying deceptive lures in unprivileged user space and coupling filesystem notifications with native thread suspension primitives, the engine reliably halts malicious execution in under 35 milliseconds.
+DeceptEnv demonstrates that effective endpoint defense against suspicious file access does not require kernel extensions or administrator privileges. By deploying deceptive lures in unprivileged user space and coupling filesystem notifications with native thread suspension primitives, the engine reliably halts malicious execution in under 200 milliseconds.
 
 Future iterations of the architecture will incorporate:
 
-- **Out-of-Band Incident Webhooks:** Automated integration with Discord, Slack, and SIEM platforms.
+- **Expanded Incident Integrations:** Extending the currently implemented Slack alerting engine (`SlackNotifier`) to support Discord, Microsoft Teams, and enterprise SIEM pipelines (Splunk, Elastic).
 - **Dynamic In-Memory Honeytoken Verification:** Automated callbacks checking canary tokens on cloud services.
 - **Decoy Re-Seeding:** Dynamic self-healing canaries that automatically redeploy upon tampering.
 

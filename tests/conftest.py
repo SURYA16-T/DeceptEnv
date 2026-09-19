@@ -11,6 +11,7 @@ def mock_canary_dir(tmp_path: Path) -> Path:
     canary_dir.mkdir()
     return canary_dir
 
+
 @pytest.fixture
 def mock_platform_adapter(mocker: Any) -> Any:
     """Mocks the platform adapter to prevent tests from executing real OS primitives."""

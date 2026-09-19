@@ -19,10 +19,16 @@ class DarwinAdapter(PlatformAdapter):
     """macOS specific OS primitives using psutil."""
 
     def get_target_canary_paths(self) -> dict[str, Path]:
+        from deceptenv.canary.deployer import CanaryDeployer
+
         config = load_config()
         return {
-            "dummy_file": config.canary_directory / "passwords.txt",
-            "dummy_db": config.canary_directory / "wallet.dat",
+            "aws_credentials": CanaryDeployer.get_aws_credentials_path(),
+            "chrome_cookies": CanaryDeployer.get_chrome_cookies_path(
+                config.canary_directory
+            ),
+            "system_config": CanaryDeployer.get_system_config_path(),
+            "env_file": CanaryDeployer.get_env_file_path(config.canary_directory),
         }
 
     def get_process_owner(self, pid: int) -> int | str:
@@ -34,19 +40,20 @@ class DarwinAdapter(PlatformAdapter):
 
     def find_pid_accessing_file(self, file_path: Path) -> int | None:
         import time
+
         current_uid = os.getuid()
         target_str = str(file_path.resolve())
 
         # TIER 1: Standard Descriptor Scanning
         for p in psutil.process_iter(["pid", "uids"]):
             try:
-                # Type ignoring because psutil type stubs can be imprecise for info dicts
-                uids = p.info.get("uids") # type: ignore
-                pid = p.info.get("pid") # type: ignore
-                
+                # Type ignoring because psutil type stubs can be imprecise
+                uids = p.info.get("uids")
+                pid = int(p.info.get("pid") or 0)
+
                 if not uids or not pid:
                     continue
-                    
+
                 if uids.real != current_uid:
                     continue
 
@@ -55,20 +62,20 @@ class DarwinAdapter(PlatformAdapter):
                         return pid
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 pass
-                
+
         # TIER 2: Heuristic Fallback for short-lived access
         best_pid = None
         highest_time = 0.0
         current_time = time.time()
-        for p in psutil.process_iter(['pid', 'uids', 'create_time']):
+        for p in psutil.process_iter(["pid", "uids", "create_time"]):
             try:
-                uids = p.info.get('uids') # type: ignore
-                pid = p.info.get('pid') # type: ignore
-                create_time = p.info.get('create_time') # type: ignore
-                
+                uids = p.info.get("uids")
+                pid = int(p.info.get("pid") or 0)
+                create_time = p.info.get("create_time")
+
                 if not uids or not pid or not create_time:
                     continue
-                    
+
                 if uids.real == current_uid and pid != os.getpid():
                     # If spawned within the last 5 seconds (fast-close evasion window)
                     if current_time - create_time < 5.0:
@@ -77,10 +84,10 @@ class DarwinAdapter(PlatformAdapter):
                             best_pid = pid
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 pass
-                
+
         if best_pid:
             return best_pid
-            
+
         return None
 
     def _verify_ownership(self, pid: int) -> None:

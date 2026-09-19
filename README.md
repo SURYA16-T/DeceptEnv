@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD013 -->
 # DeceptEnv: Zero-Privilege Active Defense & Infostealer Neutralization Engine
 
-DeceptEnv is a cross-platform, unprivileged endpoint defense daemon designed to detect, attribute, and freeze infostealer malware (e.g., LummaC2, Stealc, Vidar, RedLine) in sub-millisecond execution windows.
+DeceptEnv is a cross-platform, unprivileged endpoint defense daemon designed to detect, attribute, and freeze suspicious processes that interact with deception canaries in real-time (benchmarked at <200ms).
 
 By leveraging OS-level process ownership rules, DeceptEnv traps unauthorized credential access in user space and suspends offending processes at the kernel scheduler level—without requiring `sudo`, Administrator privileges, or kernel-mode drivers.
 
@@ -20,7 +20,7 @@ Because reading a file in `$HOME` is a standard operation, signature-based antiv
 Payload Executed ──► Scans ~/.aws, Cookies ──► Zips Staging Dir ──► Exfiltrates to C2 (Data Lost)
 
 [ DeceptEnv Active Defense Chain ]
-Payload Executed ──► Touches Canary File ──► DeceptEnv Intercepts (<5ms) ──► Process Frozen via OS Signal (Zero Leakage)
+Payload Executed ──► Touches Canary File ──► DeceptEnv Intercepts (<200ms) ──► Process Frozen via OS Signal
 ```
 
 ## Architecture & Detection Pipeline
@@ -74,14 +74,14 @@ DeceptEnv operates entirely in user space by using platform-specific OS APIs:
 | **PID Attribution** | `/proc/[pid]/fd` descriptor match | Restart Manager (`rstrtmgr.dll`) | `libproc` / open file descriptors |
 | **Execution Suspension** | `os.kill(pid, signal.SIGSTOP)` | `ntdll.NtSuspendProcess` | `os.kill(pid, signal.SIGSTOP)` |
 | **Privilege Ceiling** | Standard User (UID != 0) | Medium Integrity (Non-Admin) | Standard User (Non-wheel) |
-| **Interception Latency** | < 12ms | < 35ms | < 15ms |
+| **Interception Latency** | < 150ms | < 250ms | < 200ms |
 
 ## Features
 
 - **Zero Privilege Escalation:** Deployed without `sudo` or UAC prompts; strictly operates within the user's security boundary.
 - **Deterministic Neutralization:** Uses uncatchable signals (`SIGSTOP` / `NtSuspendProcess`) rather than process termination (`SIGKILL`), keeping the offending process in memory for forensic extraction.
-- **High-Fidelity Synthetic Canaries:** Seeds valid Chromium SQLite databases and HMAC-tagged AWS credentials with strict `0o600` read/write permissions.
-- **Bounded Forensic Collector:** Dumps memory strings, open network sockets, and execution lineage with a strict 2MB memory threshold to eliminate denial-of-service risks.
+- **High-Fidelity Synthetic Canaries:** Seeds synthetic Chromium SQLite databases (mimicking real browser cookie stores) and HMAC-tagged AWS credentials with strict `0o600` read/write permissions directly into authentic user profile directories.
+- **Bounded Forensic Collector:** Dumps memory strings, open network sockets, and execution lineage with a strict 2MB memory threshold to eliminate denial-of-service risks (Note: In-memory string extraction is currently POSIX-only; Windows support is limited to socket and lineage analysis).
 - **Symlink and Path Traversal Immune:** Canonicalizes all filesystem targets using `Path.resolve()` to prevent link redirection vulnerabilities.
 
 ## Quick Start

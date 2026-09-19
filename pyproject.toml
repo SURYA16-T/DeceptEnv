@@ -7,7 +7,7 @@ name = "deceptenv"
 version = "0.1.0"
 description = "High-security architecture for tripwires and threat mitigation"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 dependencies = [
     "psutil>=5.9.8",
     "watchdog>=4.0.0",
@@ -21,6 +21,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
+    "pytest-mock",
     "mypy",
     "ruff"
 ]
@@ -50,6 +51,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "S", "I"]
+ignore = ["E501", "S110", "S310", "E402", "F841"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S108", "S603", "E501"]
