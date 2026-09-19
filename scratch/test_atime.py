@@ -1,4 +1,5 @@
-import os, time
+import os
+import time
 
 with open("test_atime.txt", "w") as f:
     f.write("hello")

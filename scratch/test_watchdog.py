@@ -1,16 +1,19 @@
 import time
 from typing import Any
-from watchdog.observers import Observer
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 
 class LoggingEventHandler(FileSystemEventHandler):
     def on_any_event(self, event: Any) -> None:
         print(f"EVENT: {event.event_type} on {event.src_path}")
 
+
 if __name__ == "__main__":
     observer = Observer()
     handler = LoggingEventHandler()
-    observer.schedule(handler, path='.', recursive=False)
+    observer.schedule(handler, path=".", recursive=False)
     observer.start()
     try:
         with open("test_file.txt", "w") as f:
