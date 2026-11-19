@@ -81,15 +81,21 @@ def get_canary_list() -> list[dict[str, Any]]:
 
     result = []
     for key, path in paths.items():
-        exists = path.exists()
-        size = path.stat().st_size if exists else 0
-        sha = "Not Deployed"
-        if exists and path.is_file():
-            try:
-                import hashlib
+        try:
+            exists = path.exists()
+            size = path.stat().st_size if exists else 0
+        except OSError:
+            exists = False
+            size = 0
 
-                h = hashlib.sha256(path.read_bytes()).hexdigest()
-                sha = h[:16] + "..."
+        sha = "Not Deployed"
+        if exists:
+            try:
+                if path.is_file():
+                    import hashlib
+
+                    h = hashlib.sha256(path.read_bytes()).hexdigest()
+                    sha = h[:16] + "..."
             except Exception:
                 sha = "Protected"
 
