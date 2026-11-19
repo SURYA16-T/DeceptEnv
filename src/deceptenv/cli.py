@@ -60,6 +60,38 @@ def init() -> None:
         console.print(f"[bold red]Failed to deploy canaries: {e}[/bold red]")
 
 
+def _safe_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _safe_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _safe_glob(path: Path, pattern: str) -> list[Path]:
+    try:
+        if not path.exists():
+            return []
+        return [p for p in path.glob(pattern) if _safe_is_file(p)]
+    except OSError:
+        return []
+
+
+def _safe_rglob(path: Path, pattern: str) -> list[Path]:
+    try:
+        if not path.exists():
+            return []
+        return [p for p in path.rglob(pattern) if _safe_is_file(p)]
+    except OSError:
+        return []
+
+
 @app.command()
 def list_canaries() -> None:
     """Display all active tripwires and their status."""
@@ -71,28 +103,25 @@ def list_canaries() -> None:
 
     found_paths: set[Path] = set()
 
-    if config.canary_directory.exists():
-        for path in config.canary_directory.rglob("*.honey*"):
-            if path.is_file() and path not in found_paths:
-                found_paths.add(path)
-                table.add_row(str(path), "Active")
+    for path in _safe_rglob(config.canary_directory, "*.honey*"):
+        if path not in found_paths:
+            found_paths.add(path)
+            table.add_row(str(path), "Active")
 
     aws_path = CanaryDeployer.get_aws_credentials_path()
-    if aws_path.parent.exists():
-        for p in aws_path.parent.glob("credentials.honey*"):
-            if p.is_file() and p not in found_paths:
-                found_paths.add(p)
-                table.add_row(str(p), "Active")
+    for p in _safe_glob(aws_path.parent, "credentials.honey*"):
+        if p not in found_paths:
+            found_paths.add(p)
+            table.add_row(str(p), "Active")
 
     chrome_path = CanaryDeployer.get_chrome_cookies_path(config.canary_directory)
-    if chrome_path.parent.exists():
-        for p in chrome_path.parent.glob("Cookies.honey*"):
-            if p.is_file() and p not in found_paths:
-                found_paths.add(p)
-                table.add_row(str(p), "Active")
+    for p in _safe_glob(chrome_path.parent, "Cookies.honey*"):
+        if p not in found_paths:
+            found_paths.add(p)
+            table.add_row(str(p), "Active")
 
-    sys_path = CanaryDeployer.get_system_config_path()
-    if sys_path.exists() and sys_path not in found_paths:
+    sys_path = CanaryDeployer.get_system_config_path(config.canary_directory)
+    if _safe_exists(sys_path) and sys_path not in found_paths:
         found_paths.add(sys_path)
         table.add_row(str(sys_path), "Active")
 
@@ -106,34 +135,43 @@ def clean() -> None:
     count = 0
     cleaned_paths: set[Path] = set()
 
-    if config.canary_directory.exists():
-        for path in config.canary_directory.rglob("*.honey*"):
-            if path.is_file() and path not in cleaned_paths:
+    for path in _safe_rglob(config.canary_directory, "*.honey*"):
+        if path not in cleaned_paths:
+            try:
                 path.unlink(missing_ok=True)
                 cleaned_paths.add(path)
                 count += 1
+            except OSError:
+                pass
 
     aws_path = CanaryDeployer.get_aws_credentials_path()
-    if aws_path.parent.exists():
-        for path in aws_path.parent.glob("credentials.honey*"):
-            if path.is_file() and path not in cleaned_paths:
+    for path in _safe_glob(aws_path.parent, "credentials.honey*"):
+        if path not in cleaned_paths:
+            try:
                 path.unlink(missing_ok=True)
                 cleaned_paths.add(path)
                 count += 1
+            except OSError:
+                pass
 
     chrome_path = CanaryDeployer.get_chrome_cookies_path(config.canary_directory)
-    if chrome_path.parent.exists():
-        for path in chrome_path.parent.glob("Cookies.honey*"):
-            if path.is_file() and path not in cleaned_paths:
+    for path in _safe_glob(chrome_path.parent, "Cookies.honey*"):
+        if path not in cleaned_paths:
+            try:
                 path.unlink(missing_ok=True)
                 cleaned_paths.add(path)
                 count += 1
+            except OSError:
+                pass
 
-    sys_path = CanaryDeployer.get_system_config_path()
-    if sys_path.exists() and sys_path not in cleaned_paths:
-        sys_path.unlink(missing_ok=True)
-        cleaned_paths.add(sys_path)
-        count += 1
+    sys_path = CanaryDeployer.get_system_config_path(config.canary_directory)
+    if _safe_exists(sys_path) and sys_path not in cleaned_paths:
+        try:
+            sys_path.unlink(missing_ok=True)
+            cleaned_paths.add(sys_path)
+            count += 1
+        except OSError:
+            pass
 
     console.print(f"[green]Successfully cleaned {count} canaries.[/green]")
 
@@ -145,24 +183,22 @@ async def async_run() -> None:
     def try_register(path: Path) -> None:
         try:
             registry.register(path)
-        except CanaryRegistryCorruption:
-            pass  # Already registered; safe to continue
+        except (CanaryRegistryCorruption, OSError):
+            pass  # Already registered or inaccessible; safe to continue
 
-    if config.canary_directory.exists():
-        for path in config.canary_directory.rglob("*.honey*"):
-            if path.is_file():
-                try_register(path)
+    for path in _safe_rglob(config.canary_directory, "*.honey*"):
+        try_register(path)
 
     aws_path = CanaryDeployer.get_aws_credentials_path()
-    if aws_path.exists():
+    if _safe_exists(aws_path):
         try_register(aws_path)
 
     chrome_path = CanaryDeployer.get_chrome_cookies_path(config.canary_directory)
-    if chrome_path.exists():
+    if _safe_exists(chrome_path):
         try_register(chrome_path)
 
-    sys_path = CanaryDeployer.get_system_config_path()
-    if sys_path.exists():
+    sys_path = CanaryDeployer.get_system_config_path(config.canary_directory)
+    if _safe_exists(sys_path):
         try_register(sys_path)
 
     forensics = ForensicsExtractor(config)

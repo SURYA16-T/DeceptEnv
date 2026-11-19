@@ -892,32 +892,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 count = 0
                 cleaned_paths: set[Path] = set()
 
-                if config.canary_directory.exists():
-                    for path in config.canary_directory.rglob("*.honey*"):
-                        if path.is_file() and path not in cleaned_paths:
-                            path.unlink(missing_ok=True)
-                            cleaned_paths.add(path)
-                            count += 1
+                def _safe_unlink(p: Path) -> bool:
+                    try:
+                        p.unlink(missing_ok=True)
+                        return True
+                    except OSError:
+                        return False
+
+                def _safe_scan(base: Path, pat: str) -> list[Path]:
+                    try:
+                        if not base.exists():
+                            return []
+                        return [x for x in base.glob(pat) if x.is_file()]
+                    except OSError:
+                        return []
+
+                def _safe_rscan(base: Path, pat: str) -> list[Path]:
+                    try:
+                        if not base.exists():
+                            return []
+                        return [x for x in base.rglob(pat) if x.is_file()]
+                    except OSError:
+                        return []
+
+                for path in _safe_rscan(config.canary_directory, "*.honey*"):
+                    if path not in cleaned_paths and _safe_unlink(path):
+                        cleaned_paths.add(path)
+                        count += 1
 
                 aws_path = CanaryDeployer.get_aws_credentials_path()
-                if aws_path.parent.exists():
-                    for path in aws_path.parent.glob("credentials.honey*"):
-                        if path.is_file() and path not in cleaned_paths:
-                            path.unlink(missing_ok=True)
-                            cleaned_paths.add(path)
-                            count += 1
+                for path in _safe_scan(aws_path.parent, "credentials.honey*"):
+                    if path not in cleaned_paths and _safe_unlink(path):
+                        cleaned_paths.add(path)
+                        count += 1
 
                 chrome_path = CanaryDeployer.get_chrome_cookies_path(config.canary_directory)
-                if chrome_path.parent.exists():
-                    for path in chrome_path.parent.glob("Cookies.honey*"):
-                        if path.is_file() and path not in cleaned_paths:
-                            path.unlink(missing_ok=True)
-                            cleaned_paths.add(path)
-                            count += 1
+                for path in _safe_scan(chrome_path.parent, "Cookies.honey*"):
+                    if path not in cleaned_paths and _safe_unlink(path):
+                        cleaned_paths.add(path)
+                        count += 1
 
-                sys_path = CanaryDeployer.get_system_config_path()
-                if sys_path.exists() and sys_path not in cleaned_paths:
-                    sys_path.unlink(missing_ok=True)
+                sys_path = CanaryDeployer.get_system_config_path(config.canary_directory)
+                try:
+                    sys_exists = sys_path.exists()
+                except OSError:
+                    sys_exists = False
+                if sys_exists and sys_path not in cleaned_paths and _safe_unlink(sys_path):
                     cleaned_paths.add(sys_path)
                     count += 1
 

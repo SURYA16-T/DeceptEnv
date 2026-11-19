@@ -116,7 +116,10 @@ class CanaryDeployer:
                     f.write(content)
 
         # Set restrictive permissions (600)
-        os.chmod(final_path, 0o600)
+        try:
+            os.chmod(final_path, 0o600)
+        except OSError:
+            pass
         return final_path
 
     def deploy_aws_credentials(self) -> Path:
@@ -175,14 +178,17 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
                     )
 
         final_path = target_path
-        if final_path.exists() and not final_path.name.endswith(".honey"):
-            final_path = final_path.with_name(final_path.name + ".honey")
-
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Unlink previous database if exists to ensure clean SQLite recreation
-        if final_path.exists():
-            final_path.unlink()
+        try:
+            if final_path.exists() and not final_path.name.endswith(".honey"):
+                final_path = final_path.with_name(final_path.name + ".honey")
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            if final_path.exists():
+                final_path.unlink()
+        except OSError:
+            final_path = self.base_dir / "Cookies.honey"
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            if final_path.exists():
+                final_path.unlink()
 
         # Initialize SQLite DB matching Chromium schema (v130+)
         with sqlite3.connect(final_path) as conn:
@@ -233,7 +239,10 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
                 )
             conn.commit()
 
-        os.chmod(final_path, 0o600)
+        try:
+            os.chmod(final_path, 0o600)
+        except OSError:
+            pass
         return final_path
 
     def deploy_system_config(self) -> Path:
