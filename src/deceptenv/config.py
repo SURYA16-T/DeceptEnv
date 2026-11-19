@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -87,7 +87,7 @@ def load_config() -> SecurityConfig:
         Path(os.getcwd()) / ".deceptenv.json",
     ]
 
-    file_config: dict = {}
+    file_config: dict[str, Any] = {}
 
     for config_path in config_search_paths:
         if config_path.exists() and config_path.is_file():
