@@ -23,14 +23,11 @@ class CanaryMonitor:
         self.debounce_seconds = 1.0
 
         # We monitor specific deployed paths directly to ensure we catch reads
-        self.canary_paths = [
+        canary_set: set[Path] = {
             path.resolve() for path in self.platform.get_target_canary_paths().values()
-        ]
-        # Also add any explicitly registered canaries from the registry
-        for path in self.registry.get_all_paths():
-            self.canary_paths.append(path.resolve())
-        # Deduplicate
-        self.canary_paths = list(set(self.canary_paths))
+        }
+        canary_set.update(path.resolve() for path in self.registry.get_all_paths())
+        self.canary_paths = list(canary_set)
         self._atime_cache: dict[Path, float] = {}
 
     async def _poll_access(self) -> None:

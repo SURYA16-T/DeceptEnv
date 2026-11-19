@@ -1,7 +1,12 @@
+import json
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class SecurityConfig(BaseModel):
@@ -32,6 +37,10 @@ class SecurityConfig(BaseModel):
         default=None,
         description="Optional webhook URL to dispatch forensic reports to.",
     )
+    dashboard_auth_token: Optional[str] = Field(
+        default=None,
+        description="Bearer token for authenticating web dashboard API requests.",
+    )
 
     @field_validator("canary_directory")
     @classmethod
@@ -41,8 +50,12 @@ class SecurityConfig(BaseModel):
         """
         resolved = v.resolve()
 
-        # Ensure it doesn't resolve to sensitive root directories unexpectedly
-        forbidden_roots = {Path("/"), Path("/bin"), Path("/sbin"), Path("/etc")}
+        # Comprehensive deny-list of sensitive system directories
+        forbidden_roots = {
+            Path("/"), Path("/bin"), Path("/sbin"), Path("/etc"),
+            Path("/usr"), Path("/var"), Path("/System"), Path("/Library"),
+            Path("/boot"), Path("/dev"), Path("/proc"), Path("/sys"),
+        }
         if resolved in forbidden_roots:
             raise ValueError(
                 f"Cannot use {resolved} as a canary directory for security."
@@ -50,14 +63,72 @@ class SecurityConfig(BaseModel):
 
         return resolved
 
+    @field_validator("slack_webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that the Slack webhook URL is well-formed."""
+        if v is None:
+            return v
+        if not v.startswith("https://"):
+            raise ValueError("Slack webhook URL must use HTTPS.")
+        return v
+
 
 def load_config() -> SecurityConfig:
     """
-    Stub for loading configuration from a secure source.
+    Load configuration from multiple sources with priority:
+    1. Config file (~/.config/deceptenv/config.json or ./deceptenv.json)
+    2. Environment variables
+    3. Defaults
     """
-    import os
+    config_search_paths = [
+        Path.home() / ".config" / "deceptenv" / "config.json",
+        Path(os.getcwd()) / "deceptenv.json",
+        Path(os.getcwd()) / ".deceptenv.json",
+    ]
+
+    file_config: dict = {}
+
+    for config_path in config_search_paths:
+        if config_path.exists() and config_path.is_file():
+            try:
+                with open(config_path, "r") as f:
+                    file_config = json.load(f)
+                logger.info(f"Loaded configuration from {config_path}")
+                break
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to parse config file {config_path}: {e}")
+
+    # Environment variables override file config
+    canary_dir = os.environ.get(
+        "DECEPTENV_CANARY_DIR",
+        file_config.get(
+            "canary_directory",
+            str(Path(os.getcwd()) / ".deceptenv_canaries"),
+        ),
+    )
+
+    slack_url = os.environ.get(
+        "SLACK_WEBHOOK_URL",
+        file_config.get("slack_webhook_url"),
+    )
+
+    auth_token = os.environ.get(
+        "DECEPTENV_DASHBOARD_TOKEN",
+        file_config.get("dashboard_auth_token"),
+    )
 
     return SecurityConfig(
-        canary_directory=Path(os.getcwd()) / ".deceptenv_canaries",
-        slack_webhook_url=os.environ.get("SLACK_WEBHOOK_URL"),
+        canary_directory=Path(canary_dir),
+        slack_webhook_url=slack_url,
+        dashboard_auth_token=auth_token,
+        max_forensic_dump_size_bytes=int(
+            file_config.get("max_forensic_dump_size_bytes", 2 * 1024 * 1024)
+        ),
+        mitigation_enabled=bool(
+            file_config.get("mitigation_enabled", True)
+        ),
+        log_threshold=str(
+            file_config.get("log_threshold", "WARNING")
+        ),
     )

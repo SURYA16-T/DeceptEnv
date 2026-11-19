@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,12 +26,14 @@ import psutil
 
 from deceptenv.canary.deployer import CanaryDeployer
 from deceptenv.canary.registry import CanaryRegistry
-from deceptenv.config import load_config
+from deceptenv.config import SecurityConfig, load_config
 from deceptenv.engine.forensics import ForensicsExtractor
 from deceptenv.engine.mitigator import ThreatMitigator
 from deceptenv.platform import get_platform_adapter
 
 logger = logging.getLogger("deceptenv.web")
+
+_AUTH_TOKEN: str | None = os.environ.get("DECEPTENV_DASHBOARD_TOKEN")
 
 # In-memory shared state for the Web Dashboard
 _STATE: dict[str, Any] = {
@@ -42,6 +45,23 @@ _STATE: dict[str, Any] = {
     "incidents": [],
 }
 _LOCK = threading.Lock()
+
+_CACHED_CONFIG: SecurityConfig | None = None
+_CACHED_ADAPTER: Any = None
+
+
+def _get_config() -> SecurityConfig:
+    global _CACHED_CONFIG
+    if _CACHED_CONFIG is None:
+        _CACHED_CONFIG = load_config()
+    return _CACHED_CONFIG
+
+
+def _get_adapter() -> Any:
+    global _CACHED_ADAPTER
+    if _CACHED_ADAPTER is None:
+        _CACHED_ADAPTER = get_platform_adapter()
+    return _CACHED_ADAPTER
 
 
 def get_system_metrics() -> dict[str, Any]:
@@ -55,8 +75,8 @@ def get_system_metrics() -> dict[str, Any]:
 
 
 def get_canary_list() -> list[dict[str, Any]]:
-    config = load_config()
-    adapter = get_platform_adapter()
+    config = _get_config()
+    adapter = _get_adapter()
     paths = adapter.get_target_canary_paths()
 
     result = []
@@ -93,7 +113,7 @@ def execute_attack_simulation() -> dict[str, Any]:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        config = load_config()
+        config = _get_config()
         deployer = CanaryDeployer(config.canary_directory)
         forensics = ForensicsExtractor(config)
         mitigator = ThreatMitigator(forensics)
@@ -101,8 +121,10 @@ def execute_attack_simulation() -> dict[str, Any]:
         # Ensure a canary target exists
         canary_path = deployer.deploy_env_file()
 
-        script_path = Path(tempfile.gettempdir()) / "deceptenv_web_sim.py"
-        script_code = f"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", prefix="deceptenv_sim_", delete=False
+        ) as tf:
+            tf.write(f"""
 import time, os
 try:
     with open(r"{canary_path}", "rb") as f:
@@ -114,8 +136,8 @@ except Exception:
 print("READY", flush=True)
 time.sleep(5)
 print("EXFILTRATED", flush=True)
-"""
-        script_path.write_text(script_code)
+""")
+            script_path = Path(tf.name)
 
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, str(script_path)],
@@ -132,12 +154,19 @@ print("EXFILTRATED", flush=True)
         duration_ms = round((time.time() - t0) * 1000, 2)
     finally:
         loop.close()
+        if 'script_path' in locals() and script_path.exists():
+            script_path.unlink(missing_ok=True)
 
     with _LOCK:
         _STATE["events_processed"] += 1
         if report:
             _STATE["threats_neutralized"] += 1
-            _STATE["last_threat"] = f"PID {proc.pid} ({proc.name() if hasattr(proc, 'name') else 'Python'})"
+            proc_name = "Python (Simulated Infostealer)"
+            try:
+                proc_name = psutil.Process(proc.pid).name()
+            except Exception:
+                pass
+            _STATE["last_threat"] = f"PID {proc.pid} ({proc_name})"
             _STATE["avg_mitigation_ms"] = duration_ms
 
             incident_record = {
@@ -647,6 +676,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="toast">Notification</div>
 
     <script>
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(str);
+            return div.innerHTML;
+        }
+
         function showToast(msg, isError = false) {
             const toast = document.getElementById('toast');
             toast.textContent = msg;
@@ -659,7 +695,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 const data = await res.json();
                 
-                document.getElementById('platform-badge').textContent = `ACTIVE (${data.platform})`;
+                document.getElementById('platform-badge').textContent = `ACTIVE (${escapeHtml(data.platform)})`;
                 document.getElementById('val-canaries').textContent = data.canaries.filter(c => c.status === 'ARMED').length;
                 document.getElementById('val-threats').textContent = data.threats_neutralized;
                 document.getElementById('val-latency').textContent = `${data.avg_mitigation_ms}ms`;
@@ -672,11 +708,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>
-                            <div style="font-weight:600; color: #fff;">${c.name}</div>
-                            <div style="font-size:0.75rem; color: var(--text-muted); font-family: monospace;">${c.path}</div>
+                            <div style="font-weight:600; color: #fff;">${escapeHtml(c.name)}</div>
+                            <div style="font-size:0.75rem; color: var(--text-muted); font-family: monospace;">${escapeHtml(c.path)}</div>
                         </td>
-                        <td><span class="badge ${c.status === 'ARMED' ? 'badge-green' : 'badge-red'}">${c.status}</span></td>
-                        <td><span class="code-pill">${c.sha256}</span></td>
+                        <td><span class="badge ${c.status === 'ARMED' ? 'badge-green' : 'badge-red'}">${escapeHtml(c.status)}</span></td>
+                        <td><span class="code-pill">${escapeHtml(c.sha256)}</span></td>
                     `;
                     tbody.appendChild(tr);
                 });
@@ -696,18 +732,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                         if (inc.lineage && inc.lineage.length > 0) {
                             lineageHtml = '<div class="lineage-tree"><strong>Ancestry Lineage:</strong><br>';
                             inc.lineage.forEach((proc, idx) => {
-                                lineageHtml += `${'&nbsp;'.repeat(idx * 2)}↳ PID ${proc.pid}: ${proc.name} (PPID ${proc.ppid})<br>`;
+                                lineageHtml += `${'&nbsp;'.repeat(idx * 2)}↳ PID ${escapeHtml(proc.pid)}: ${escapeHtml(proc.name)} (PPID ${escapeHtml(proc.ppid)})<br>`;
                             });
                             lineageHtml += '</div>';
                         }
 
                         div.innerHTML = `
                             <div class="incident-header">
-                                <span class="incident-pid">🛑 PID ${inc.pid} [FROZEN]</span>
-                                <span class="incident-time">${inc.timestamp} (${inc.latency_ms}ms)</span>
+                                <span class="incident-pid">🛑 PID ${escapeHtml(inc.pid)} [FROZEN]</span>
+                                <span class="incident-time">${escapeHtml(inc.timestamp)} (${escapeHtml(inc.latency_ms)}ms)</span>
                             </div>
                             <div class="incident-body">
-                                <strong>Tripwire:</strong> ${inc.target}<br>
+                                <strong>Tripwire:</strong> ${escapeHtml(inc.target)}<br>
                                 <strong>Mitigation:</strong> Scheduler-level thread suspension (SIGSTOP / NtSuspendProcess)
                             </div>
                             ${lineageHtml}

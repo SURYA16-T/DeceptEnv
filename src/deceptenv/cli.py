@@ -34,28 +34,28 @@ def init() -> None:
         try:
             registry.register(aws_path)
         except CanaryRegistryCorruption:
-            pass
+            pass  # Already registered; safe to continue
 
         chrome_path = deployer.deploy_chrome_cookies()
         console.print(f"[green]✔[/green] Deployed Chrome Canary at {chrome_path}")
         try:
             registry.register(chrome_path)
         except CanaryRegistryCorruption:
-            pass
+            pass  # Already registered; safe to continue
 
         env_path = deployer.deploy_env_file()
         console.print(f"[green]✔[/green] Deployed .env Canary at {env_path}")
         try:
             registry.register(env_path)
         except CanaryRegistryCorruption:
-            pass
+            pass  # Already registered; safe to continue
 
         sys_path = deployer.deploy_system_config()
         console.print(f"[green]✔[/green] Deployed System Config Canary at {sys_path}")
         try:
             registry.register(sys_path)
         except CanaryRegistryCorruption:
-            pass
+            pass  # Already registered; safe to continue
     except Exception as e:
         console.print(f"[bold red]Failed to deploy canaries: {e}[/bold red]")
 
@@ -146,7 +146,7 @@ async def async_run() -> None:
         try:
             registry.register(path)
         except CanaryRegistryCorruption:
-            pass
+            pass  # Already registered; safe to continue
 
     if config.canary_directory.exists():
         for path in config.canary_directory.rglob("*.honey*"):

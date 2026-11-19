@@ -86,6 +86,10 @@ class DarwinAdapter(PlatformAdapter):
                 pass
 
         if best_pid:
+            logger.warning(
+                f"PID attribution via heuristic fallback (Tier 2): PID {best_pid}. "
+                f"Confidence: LOW — based on most-recently-spawned process within 5s window."
+            )
             return best_pid
 
         return None

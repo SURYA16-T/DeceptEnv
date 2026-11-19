@@ -55,16 +55,16 @@ class ForensicsExtractor:
 
         # Read /proc/{pid}/mem based on readable maps for Linux.
         # Safely fallback to empty bytes on error or non-Linux OS.
-        mem_data = b""
+        mem_buffer = bytearray()
         if os.name != "posix":
-            return mem_data
+            return bytes(mem_buffer)
 
         try:
             maps_path = f"/proc/{pid}/maps"
             mem_path = f"/proc/{pid}/mem"
 
             if not os.path.exists(maps_path) or not os.path.exists(mem_path):
-                return mem_data
+                return bytes(mem_buffer)
 
             regions = []
             with open(maps_path, "r") as f:
@@ -78,18 +78,18 @@ class ForensicsExtractor:
 
             with open(mem_path, "rb") as mem_file:
                 for start, end in regions:
-                    if len(mem_data) >= max_bytes:
+                    if len(mem_buffer) >= max_bytes:
                         break
 
-                    size_to_read = min(end - start, max_bytes - len(mem_data))
+                    size_to_read = min(end - start, max_bytes - len(mem_buffer))
                     mem_file.seek(start)
                     chunk = mem_file.read(size_to_read)
-                    mem_data += chunk
+                    mem_buffer.extend(chunk)
 
         except (PermissionError, IOError, OSError, ProcessLookupError) as e:
             logger.debug(f"Failed to read memory for PID {pid}: {e}")
 
-        return mem_data
+        return bytes(mem_buffer)
 
     def extract_lineage(self, pid: int) -> list[ProcessInfo]:
         """Get process tree lineage to find the root infostealer."""

@@ -47,7 +47,12 @@ class CanaryDeployer:
         else:
             chrome_dir = Path.home() / ".config" / "google-chrome" / "Default"
 
-        if not chrome_dir.exists() and base_dir is not None:
+        try:
+            chrome_exists = chrome_dir.exists()
+        except OSError:
+            chrome_exists = False
+
+        if not chrome_exists and base_dir is not None:
             return base_dir / "Cookies.honey"
         return chrome_dir / "Cookies.honey"
 
@@ -109,15 +114,17 @@ class CanaryDeployer:
         access_key = f"AKIA{secrets.token_hex(8).upper()}"
         secret_key = secrets.token_hex(20)
 
-        # Create an HMAC signature to verify it's our canary if stolen
+        # Generate a per-deployment HMAC key for verification
+        hmac_key = secrets.token_bytes(32)
         signature = hmac.new(
-            b"deceptenv_aws_secret", access_key.encode(), "sha256"
+            hmac_key, access_key.encode(), "sha256"
         ).hexdigest()
 
         content = f"""[default]
 aws_access_key_id = {access_key}
 aws_secret_access_key = {secret_key}
 # DECEPTENV_SIG={signature}
+# DECEPTENV_HMAC_KEY={hmac_key.hex()}
 """
         return self._safe_write(target_path, content.encode())
 
@@ -125,7 +132,7 @@ aws_secret_access_key = {secret_key}
         """Create a plausible .env file trap."""
         target_path = self.get_env_file_path(self.base_dir)
 
-        if self.base_dir.resolve() not in target_path.resolve().parents:
+        if not target_path.resolve().is_relative_to(self.base_dir.resolve()):
             raise SecurityBoundaryViolation(
                 "Attempted to deploy canary outside configured directory."
             )
@@ -143,12 +150,17 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
         # If the target directory does not exist and base_dir was used, verify security boundary
         if self.base_dir.resolve() in target_path.resolve().parents:
             pass
-        elif not target_path.parent.exists():
-            target_path = self.base_dir / "Cookies.honey"
-            if self.base_dir.resolve() not in target_path.resolve().parents:
-                raise SecurityBoundaryViolation(
-                    "Attempted to deploy canary outside configured directory."
-                )
+        else:
+            try:
+                parent_exists = target_path.parent.exists()
+            except OSError:
+                parent_exists = False
+            if not parent_exists:
+                target_path = self.base_dir / "Cookies.honey"
+                if not target_path.resolve().is_relative_to(self.base_dir.resolve()):
+                    raise SecurityBoundaryViolation(
+                        "Attempted to deploy canary outside configured directory."
+                    )
 
         final_path = target_path
         if final_path.exists() and not final_path.name.endswith(".honey"):
@@ -159,11 +171,6 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
         # Unlink previous database if exists to ensure clean SQLite recreation
         if final_path.exists():
             final_path.unlink()
-
-        # Create empty file exclusively
-        with open(final_path, "xb"):
-            pass
-        os.chmod(final_path, 0o600)
 
         # Initialize SQLite DB matching Chromium schema (v130+)
         with sqlite3.connect(final_path) as conn:
@@ -214,6 +221,7 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
                 )
             conn.commit()
 
+        os.chmod(final_path, 0o600)
         return final_path
 
     def deploy_system_config(self) -> Path:
