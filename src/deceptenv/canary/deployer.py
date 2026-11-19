@@ -57,15 +57,22 @@ class CanaryDeployer:
         return chrome_dir / "Cookies.honey"
 
     @staticmethod
-    def get_system_config_path() -> Path:
+    def get_system_config_path(base_dir: Path | None = None) -> Path:
         """Return the target path for synthetic system configuration."""
         if sys.platform == "darwin":
-            return (
+            sys_path = (
                 Path.home()
                 / "Library"
                 / "Preferences"
                 / "com.apple.deceptenv.sys.plist.honey"
             )
+            try:
+                can_access = sys_path.parent.exists()
+            except OSError:
+                can_access = False
+            if not can_access and base_dir is not None:
+                return base_dir / "com.apple.deceptenv.sys.plist.honey"
+            return sys_path
         elif sys.platform == "win32":
             appdata = os.environ.get(
                 "APPDATA", str(Path.home() / "AppData" / "Roaming")
@@ -84,11 +91,16 @@ class CanaryDeployer:
     def _safe_write(self, target_path: Path, content: bytes) -> Path:
         """Safely write a file ensuring no overwrites of non-canary files and strict permissions."""
         final_path = target_path
-        if final_path.exists() and not final_path.name.endswith(".honey"):
-            final_path = final_path.with_name(final_path.name + ".honey")
-
-        # Ensure directory exists
-        final_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if final_path.exists() and not final_path.name.endswith(".honey"):
+                final_path = final_path.with_name(final_path.name + ".honey")
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fallback to configured base_dir if system directory access is denied
+            final_path = self.base_dir / (
+                final_path.name if final_path.name.endswith(".honey") else final_path.name + ".honey"
+            )
+            final_path.parent.mkdir(parents=True, exist_ok=True)
 
         if final_path.exists():
             # If the canary already exists, safely overwrite in place
@@ -226,7 +238,7 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
 
     def deploy_system_config(self) -> Path:
         """Create a platform-specific system configuration tripwire."""
-        target_path = self.get_system_config_path()
+        target_path = self.get_system_config_path(self.base_dir)
         if sys.platform == "darwin":
             content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

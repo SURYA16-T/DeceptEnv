@@ -37,14 +37,17 @@ class CanaryMonitor:
         )
         # Initialize atime cache
         for path in self.canary_paths:
-            if path.exists():
-                self._atime_cache[path] = os.stat(path).st_atime
+            try:
+                if path.exists():
+                    self._atime_cache[path] = os.stat(path).st_atime
+            except OSError:
+                pass
 
         while True:
             for path in self.canary_paths:
-                if not path.exists():
-                    continue
                 try:
+                    if not path.exists():
+                        continue
                     current_atime = os.stat(path).st_atime
                     cached_atime = self._atime_cache.get(path)
 
