@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -696,9 +697,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             setTimeout(() => { toast.className = ''; }, 3500);
         }
 
+        async function apiFetch(url, options = {}) {
+            const token = sessionStorage.getItem('deceptenv_token');
+            const headers = Object.assign({}, options.headers || {});
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            let res = await fetch(url, Object.assign({}, options, { headers }));
+            if (res.status === 401) {
+                const entered = window.prompt('DeceptEnv Dashboard Bearer Token required:');
+                if (entered) {
+                    sessionStorage.setItem('deceptenv_token', entered);
+                    headers['Authorization'] = `Bearer ${entered}`;
+                    res = await fetch(url, Object.assign({}, options, { headers }));
+                }
+            }
+            return res;
+        }
+
         async function fetchStatus() {
             try {
-                const res = await fetch('/api/status');
+                const res = await apiFetch('/api/status');
+                if (!res.ok) return;
                 const data = await res.json();
                 
                 document.getElementById('platform-badge').textContent = `ACTIVE (${escapeHtml(data.platform)})`;
@@ -766,7 +786,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         async function triggerSimulation() {
             showToast("⚡ Spawning simulated infostealer attack...");
             try {
-                const res = await fetch('/api/simulate', { method: 'POST' });
+                const res = await apiFetch('/api/simulate', { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
                     showToast(`✔ Threat PID ${data.pid} neutralized in ${data.latency_ms}ms!`);
@@ -782,9 +802,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         async function deployCanaries() {
             showToast("Deploying synthetic canaries...");
             try {
-                const res = await fetch('/api/init', { method: 'POST' });
+                const res = await apiFetch('/api/init', { method: 'POST' });
                 const data = await res.json();
-                showToast(data.message);
+                showToast(data.message || data.error || "Deploy done", !res.ok);
                 await fetchStatus();
             } catch (err) {
                 showToast("Deploy error: " + err, true);
@@ -794,9 +814,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         async function cleanCanaries() {
             showToast("Cleaning all decoy canaries...");
             try {
-                const res = await fetch('/api/clean', { method: 'POST' });
+                const res = await apiFetch('/api/clean', { method: 'POST' });
                 const data = await res.json();
-                showToast(data.message);
+                showToast(data.message || data.error || "Clean done", !res.ok);
                 await fetchStatus();
             } catch (err) {
                 showToast("Clean error: " + err, true);
@@ -816,15 +836,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _check_auth(self) -> bool:
         """Verify Bearer token when dashboard_auth_token is configured."""
         config = _get_config()
-        token = config.dashboard_auth_token
-        if not token:
+        expected = config.dashboard_auth_token or _AUTH_TOKEN
+        if not expected:
             return True  # No token configured — open access
         auth_header = self.headers.get("Authorization", "")
-        # Also allow module-level env override
-        expected = token or _AUTH_TOKEN
-        if not expected:
-            return True
-        if auth_header == f"Bearer {expected}":
+        if secrets.compare_digest(auth_header, f"Bearer {expected}"):
             return True
         self.send_response(401)
         self.send_header("Content-Type", "application/json")
@@ -949,7 +965,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         cleaned_paths.add(path)
                         count += 1
 
-                aws_path = CanaryDeployer.get_aws_credentials_path()
+                aws_path = CanaryDeployer.get_aws_credentials_path(config.canary_directory)
                 for path in _safe_scan(aws_path.parent, "credentials.honey*"):
                     if path not in cleaned_paths and _safe_unlink(path):
                         cleaned_paths.add(path)

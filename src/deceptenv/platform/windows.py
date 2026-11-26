@@ -74,11 +74,15 @@ class WindowsAdapter(PlatformAdapter):
 
         config = load_config()
         return {
-            "aws_credentials": CanaryDeployer.get_aws_credentials_path(),
+            "aws_credentials": CanaryDeployer.get_aws_credentials_path(
+                config.canary_directory
+            ),
             "chrome_cookies": CanaryDeployer.get_chrome_cookies_path(
                 config.canary_directory
             ),
-            "system_config": CanaryDeployer.get_system_config_path(),
+            "system_config": CanaryDeployer.get_system_config_path(
+                config.canary_directory
+            ),
             "env_file": CanaryDeployer.get_env_file_path(config.canary_directory),
         }
 

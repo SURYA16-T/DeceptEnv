@@ -120,6 +120,78 @@ class TestDashboardAuth:
         )
         assert handler._check_auth() is True
 
+    def test_api_enforces_module_auth_token_when_config_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("os.getcwd", lambda: str(tmp_path))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("DECEPTENV_CANARY_DIR", raising=False)
+        monkeypatch.delenv("DECEPTENV_DASHBOARD_TOKEN", raising=False)
+        monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+
+        import deceptenv.web as web_mod
+        from deceptenv.config import SecurityConfig
+
+        mock_config = SecurityConfig(canary_directory=tmp_path, dashboard_auth_token=None)
+        monkeypatch.setattr(web_mod, "_CACHED_CONFIG", mock_config)
+        monkeypatch.setattr(web_mod, "_AUTH_TOKEN", "env_secret")
+
+        unauth = _make_handler("GET", "/api/canaries")
+        unauth.send_response = lambda code: setattr(unauth, "_test_status", code)
+        unauth.send_header = lambda k, v: None
+        unauth.end_headers = lambda: None
+        assert unauth._check_auth() is False
+
+        auth = _make_handler(
+            "GET",
+            "/api/canaries",
+            headers={"Authorization": "Bearer env_secret"},
+        )
+        assert auth._check_auth() is True
+
+
+class TestDashboardRoutes:
+    """Test GET / and /api/status routes directly."""
+
+    def test_get_dashboard_html(self) -> None:
+        handler = _make_handler("GET", "/")
+        handler.send_response = lambda code: setattr(handler, "_test_status", code)
+        handler.send_header = lambda k, v: None
+        handler.end_headers = lambda: None
+
+        handler.do_GET()
+        assert getattr(handler, "_test_status", None) == 200
+        body = handler.wfile.getvalue().decode("utf-8")
+        assert "DeceptEnv Threat Telemetry" in body
+        assert "escapeHtml" in body
+
+    def test_get_api_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        import deceptenv.web as web_mod
+        from deceptenv.config import SecurityConfig
+
+        monkeypatch.setattr(
+            web_mod,
+            "_CACHED_CONFIG",
+            SecurityConfig(canary_directory=tmp_path, dashboard_auth_token=None),
+        )
+        monkeypatch.setattr(web_mod, "_AUTH_TOKEN", None)
+
+        handler = _make_handler("GET", "/api/status")
+        handler.send_response = lambda code: setattr(handler, "_test_status", code)
+        handler.send_header = lambda k, v: None
+        handler.end_headers = lambda: None
+
+        handler.do_GET()
+        assert getattr(handler, "_test_status", None) == 200
+        data = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        assert "platform" in data
+        assert "canaries" in data
+        assert "incidents" in data
+
 
 class TestGetCanaryList:
     """Test get_canary_list() with mocked platform adapter."""

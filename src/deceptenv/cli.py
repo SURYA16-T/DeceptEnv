@@ -108,7 +108,7 @@ def list_canaries() -> None:
             found_paths.add(path)
             table.add_row(str(path), "Active")
 
-    aws_path = CanaryDeployer.get_aws_credentials_path()
+    aws_path = CanaryDeployer.get_aws_credentials_path(config.canary_directory)
     for p in _safe_glob(aws_path.parent, "credentials.honey*"):
         if p not in found_paths:
             found_paths.add(p)
@@ -144,7 +144,7 @@ def clean() -> None:
             except OSError:
                 pass
 
-    aws_path = CanaryDeployer.get_aws_credentials_path()
+    aws_path = CanaryDeployer.get_aws_credentials_path(config.canary_directory)
     for path in _safe_glob(aws_path.parent, "credentials.honey*"):
         if path not in cleaned_paths:
             try:
@@ -189,7 +189,7 @@ async def async_run() -> None:
     for path in _safe_rglob(config.canary_directory, "*.honey*"):
         try_register(path)
 
-    aws_path = CanaryDeployer.get_aws_credentials_path()
+    aws_path = CanaryDeployer.get_aws_credentials_path(config.canary_directory)
     if _safe_exists(aws_path):
         try_register(aws_path)
 

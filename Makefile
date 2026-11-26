@@ -1,4 +1,4 @@
-.PHONY: install dev lint typecheck test test-cov format run dashboard init clean help
+.PHONY: install dev lint typecheck test test-e2e simulate test-cov format run dashboard init clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -22,8 +22,14 @@ format: ## Auto-format with ruff
 test: ## Run unit tests
 	pytest tests/unit/ -v --tb=short
 
+test-e2e: ## Run sandboxed E2E attacker simulation tests
+	pytest tests/simulation/ -v -s --tb=short
+
+simulate: ## Run live sandboxed attacker simulator script
+	python tests/simulation/attack_simulator.py
+
 test-cov: ## Run tests with coverage report
-	pytest tests/unit/ -v --cov=deceptenv --cov-report=term-missing --cov-report=html
+	pytest tests/ -v --cov=deceptenv --cov-report=term-missing --cov-report=html
 
 run: ## Start the active deception monitor
 	deceptenv run

@@ -21,10 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dashboard Auth**: Optional Bearer token authentication for API endpoints (`DECEPTENV_DASHBOARD_TOKEN`)
 - **Config System**: JSON file config with environment variable overrides, Pydantic validation, forbidden path deny-list
 - **Security Hardening**: XSS protection (escapeHtml), temp file race prevention, persistent HMAC keys, comprehensive OSError/PermissionError handling for sandboxed environments (macOS TCC)
+- **Verification Proof**: Added `VERIFICATION_PROOF.md` and sandboxed attacker neutralization + forensic capture E2E test in `tests/simulation/test_e2e.py`
+- **Packaging**: Declared MIT license metadata (`license = { file = "LICENSE" }`) and PyPI classifiers in `pyproject.toml`
 
 ### Security
 
-- Dashboard API endpoints enforce Bearer token authentication when `dashboard_auth_token` is configured
+- Dashboard API endpoints enforce timing-safe (`secrets.compare_digest`) Bearer token authentication for both `config.dashboard_auth_token` and `DECEPTENV_DASHBOARD_TOKEN`, with browser UI session prompt support
+- Platform adapters (`DarwinAdapter`, `LinuxAdapter`, `WindowsAdapter`), CLI, and Web Dashboard consistently honor `base_dir` fallback paths when `~/.aws` or `~/Library/Preferences` deny access
+- Removed legacy tracked scratch artifacts (`scratch/*`, `test_atime.txt`, `test_file.txt`) from git tracking
 - HMAC signing keys are now persistent per-deployment (not ephemeral per-call)
 - All dynamic HTML values sanitized via `escapeHtml()` to prevent XSS
 - Temporary simulation scripts use `NamedTemporaryFile` with cleanup to prevent predictable path attacks

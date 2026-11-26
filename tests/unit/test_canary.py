@@ -202,3 +202,18 @@ def test_canary_deployer_hmac_key_persistence(tmp_path: Path) -> None:
     key2 = deployer._get_deploy_key()
     assert key1 == key2  # Must return same key on second call
     assert len(key1) == 32
+
+
+def test_canary_deployer_sandbox_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When home dirs are inaccessible/non-writable, getters fall back to base_dir."""
+    base_dir = tmp_path / "canaries"
+    base_dir.mkdir()
+
+    monkeypatch.setattr(CanaryDeployer, "_can_use_directory", staticmethod(lambda _: False))
+    assert CanaryDeployer.get_aws_credentials_path(base_dir) == base_dir / "credentials.honey"
+    assert (
+        CanaryDeployer.get_system_config_path(base_dir).parent == base_dir
+    )
+    assert CanaryDeployer.get_system_config_path(base_dir).name.endswith(".honey")

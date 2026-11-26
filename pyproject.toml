@@ -7,7 +7,19 @@ name = "deceptenv"
 version = "0.1.0"
 description = "High-security architecture for tripwires and threat mitigation"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.9"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
 dependencies = [
     "psutil>=5.9.8",
     "watchdog>=4.0.0",

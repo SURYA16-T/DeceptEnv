@@ -21,9 +21,25 @@ class CanaryDeployer:
         return secrets.token_hex(32)
 
     @staticmethod
-    def get_aws_credentials_path() -> Path:
+    def _can_use_directory(target_dir: Path) -> bool:
+        """Return True if target_dir (or its nearest existing ancestor) is accessible and writable."""
+        try:
+            check = target_dir
+            while not check.exists():
+                if check == check.parent:
+                    return False
+                check = check.parent
+            return os.access(check, os.W_OK)
+        except OSError:
+            return False
+
+    @staticmethod
+    def get_aws_credentials_path(base_dir: Path | None = None) -> Path:
         """Return the target path for synthetic AWS credentials."""
-        return Path.home() / ".aws" / "credentials.honey"
+        aws_path = Path.home() / ".aws" / "credentials.honey"
+        if base_dir is not None and not CanaryDeployer._can_use_directory(aws_path.parent):
+            return base_dir / "credentials.honey"
+        return aws_path
 
     @staticmethod
     def get_chrome_cookies_path(base_dir: Path | None = None) -> Path:
@@ -48,11 +64,11 @@ class CanaryDeployer:
             chrome_dir = Path.home() / ".config" / "google-chrome" / "Default"
 
         try:
-            chrome_exists = chrome_dir.exists()
+            chrome_writable = chrome_dir.exists() and os.access(chrome_dir, os.W_OK)
         except OSError:
-            chrome_exists = False
+            chrome_writable = False
 
-        if not chrome_exists and base_dir is not None:
+        if not chrome_writable and base_dir is not None:
             return base_dir / "Cookies.honey"
         return chrome_dir / "Cookies.honey"
 
@@ -66,22 +82,19 @@ class CanaryDeployer:
                 / "Preferences"
                 / "com.apple.deceptenv.sys.plist.honey"
             )
-            try:
-                can_access = sys_path.parent.exists()
-            except OSError:
-                can_access = False
-            if not can_access and base_dir is not None:
-                return base_dir / "com.apple.deceptenv.sys.plist.honey"
-            return sys_path
         elif sys.platform == "win32":
             appdata = os.environ.get(
                 "APPDATA", str(Path.home() / "AppData" / "Roaming")
             )
-            return (
+            sys_path = (
                 Path(appdata) / "Microsoft" / "Windows" / "deceptenv_config.ini.honey"
             )
         else:
-            return Path.home() / ".config" / "deceptenv" / "system.conf.honey"
+            sys_path = Path.home() / ".config" / "deceptenv" / "system.conf.honey"
+
+        if base_dir is not None and not CanaryDeployer._can_use_directory(sys_path.parent):
+            return base_dir / sys_path.name
+        return sys_path
 
     @staticmethod
     def get_env_file_path(base_dir: Path) -> Path:
@@ -141,7 +154,7 @@ class CanaryDeployer:
 
     def deploy_aws_credentials(self) -> Path:
         """Create a synthetic AWS credentials file."""
-        target_path = self.get_aws_credentials_path()
+        target_path = self.get_aws_credentials_path(self.base_dir)
 
         access_key = f"AKIA{secrets.token_hex(8).upper()}"
         secret_key = secrets.token_hex(20)
