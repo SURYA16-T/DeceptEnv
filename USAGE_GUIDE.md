@@ -1,115 +1,122 @@
 <!-- markdownlint-disable MD013 -->
 # DeceptEnv: Complete Usage & Architecture Guide
 
-## 🌟 What is DeceptEnv? (How it works & Why it's helpful)
+## 🌟 What is DeceptEnv?
 
-DeceptEnv is a **zero-privilege active defense engine** designed to hunt and neutralize **Infostealers** (like RedLine, Raccoon, or Vidar).
+DeceptEnv is a **zero-privilege active defense engine** built to detect, attribute, and freeze **infostealers** before they can exfiltrate credentials, browser cookies, or API secrets.
 
-Infostealers are a specific type of malware that try to steal your browser cookies, cryptocurrency wallets, and cloud credentials (like AWS keys). Because they do this using completely normal file-read operations, traditional Anti-Viruses and EDRs often miss them or require heavy kernel-level access to stop them.
+Because infostealers execute under normal user permissions using standard file reads, signature AV and kernel EDR tools often allow those reads until exfiltration completes. DeceptEnv traps those reads in user space:
 
-**How it works:**
-
-1. **Deception:** It creates "honey-tokens" (fake, highly-enticing files like synthetic AWS credentials and Chrome cookies) in the exact folders where malware expects to find them.
-2. **Monitoring:** It watches these fake files silently using the OS's native file-system hooks with near-zero CPU overhead.
-3. **Mitigation:** The moment an unauthorized script or malware tries to read the fake file, DeceptEnv instantly freezes the process at the OS-scheduler level (in under 2 milliseconds!) before it can steal your data.
-4. **Forensics:** It safely dumps the frozen malware's memory, command line, and active network connections, and ships it off to Slack for your incident response team.
-
-**Where to use it:**
-
-- On developer workstations (Mac/Linux/Windows) to protect sensitive source code and cloud credentials.
-- On corporate laptops as a lightweight, user-space addition to existing EDR solutions.
-- In CI/CD build environments to catch rogue supply-chain dependencies trying to steal environment variables.
+1. **Deception & Boundary Hardening (`CanaryDeployer`):** Creates realistic `0o600` honey-tokens (`credentials.honey`, atomic Chromium v130+ SQLite `Cookies.honey`, `.env.honey`, and OS config decoys) while rejecting symlinks (`SecurityBoundaryViolation`), computing persistent HMAC keys, and arming `st_atime < st_mtime` timestamps.
+2. **Continuous Async Telemetry (`CanaryMonitor`):** Polls nanosecond `st_atime_ns` and `st_mtime_ns` changes every `10ms`, re-arming timestamps after every trigger so consecutive real reads stay detectable, buffered through a `1.0s` FIFO `asyncio.Queue` debouncer.
+3. **Two-Tier Attribution & Prevention (`PlatformAdapter`, `ThreatMitigator`):** Attributes open file handles (or recent user processes within 5s excluding self, ancestors, `STATUS_STOPPED`, and `STATUS_ZOMBIE`), enforces UID/SID ownership and ancestor self-harm guards, and suspends offending threads (`SIGSTOP` / `NtSuspendProcess`).
+4. **Bounded Forensics & Alerting (`ForensicsExtractor`, `SlackNotifier`, `web.py`):** Captures process ancestry lineage, open INET sockets, and bounded `2MB` memory strings (Linux `/proc/[pid]/mem`), serves an authenticated localhost Web Dashboard (`127.0.0.1:8080`), and optionally posts HTTPS-validated Slack Block Kit alerts.
 
 ---
 
-## 💻 CLI & Terminal Usage
+## 💻 CLI & Web Dashboard Commands
 
-DeceptEnv is packaged as a standard Python command-line interface (CLI). To use it, simply activate your virtual environment and run the `deceptenv` command!
+Activate your virtual environment (`.venv/bin/activate` on macOS/Linux or `.venv\Scripts\Activate.ps1` on Windows) and use the `deceptenv` CLI:
 
-### General Commands
+- **`deceptenv --help`** — Display command options.
+- **`deceptenv init`** — Deploy armed synthetic canaries (`credentials.honey`, `Cookies.honey`, `.env.honey`, and system config decoy).
+- **`deceptenv list-canaries`** — Display active canary paths and status.
+- **`deceptenv run`** — Start the live terminal telemetry console and active mitigation monitor.
+- **`deceptenv dashboard`** — Start the interactive Web Telemetry Console on `http://127.0.0.1:8080`.
+- **`deceptenv clean`** — Unlink all deployed `.honey` decoy files.
 
-- **Help Menu:** `deceptenv --help`
-- **Deploy Canaries:** `deceptenv init`
-  *(This creates the fake files across your system)*
-- **Check Status:** `deceptenv list-canaries`
-  *(Shows you exactly where the fake files were deployed)*
-- **Cleanup:** `deceptenv clean`
-  *(Removes all fake files safely)*
-- **Start Defense Engine:** `deceptenv run`
-  *(Starts the live monitoring dashboard and active mitigation loop)*
+### Sandboxed Attack Simulation Proof
+
+Run the standalone unmodified-read simulation script at any time:
+
+```bash
+python tests/simulation/attack_simulator.py
+# Or:
+make simulate
+```
+
+See [VERIFICATION_PROOF.md](VERIFICATION_PROOF.md) and [README.md](README.md#5-verified-simulation--prevention-proof-observed-output) for captured simulation outputs and test metrics.
 
 ---
 
 ## 🖥️ Operating System Specifics
 
-DeceptEnv is fully cross-platform and adapts to the OS it is running on automatically.
-
 ### 🍎 macOS
 
-- **Canary Locations:**
+- **Default Canary Locations (with automatic fallback to `DECEPTENV_CANARY_DIR` / `./.deceptenv_canaries` if macOS TCC blocks `$HOME` paths):**
   - AWS: `~/.aws/credentials.honey`
+  - Chrome: `~/Library/Application Support/Google/Chrome/Default/Cookies.honey`
   - System: `~/Library/Preferences/com.apple.deceptenv.sys.plist.honey`
-- **Under the hood:** Uses `FSEvents` for monitoring and `SIGSTOP` signals to instantly freeze malware threads.
+  - Workspace: `./.deceptenv_canaries/.env.honey`
+- **Under the hood:** Uses `10ms` `st_atime_ns`/`st_mtime_ns` polling (`st_atime < st_mtime` armed on APFS), `psutil.Process.open_files()` + Tier 2 attribution, and `os.kill(pid, signal.SIGSTOP)` to freeze threads in user space.
 - **How to test:**
 
   ```bash
-  # Open two terminals
   # Terminal 1:
   deceptenv init
   deceptenv run
-  
+
   # Terminal 2:
-  cat ~/.aws/credentials.honey
-  # The 'cat' process will be instantly frozen by Terminal 1!
+  python3 -c 'import time; print(len(open(".deceptenv_canaries/.env.honey", "rb").read())); time.sleep(10)' &
+  ps -o pid,stat,command -p $!   # STAT shows T (stopped)
   ```
 
 ### 🐧 Linux
 
-- **Canary Locations:**
+- **Default Canary Locations:**
   - AWS: `~/.aws/credentials.honey`
+  - Chrome: `~/.config/google-chrome/Default/Cookies.honey` (fallback `canary_directory`)
   - System: `~/.config/deceptenv/system.conf.honey`
-- **Under the hood:** Uses `inotify` for file monitoring and `SIGSTOP` for mitigation. Safely extracts memory from `/proc/[pid]/mem`.
+  - Workspace: `./.deceptenv_canaries/.env.honey`
+- **Under the hood:** Uses `10ms` `st_atime_ns`/`st_mtime_ns` polling (`relatime`-compatible arming), `/proc/[pid]/fd` descriptor matching + Tier 2 attribution, `SIGSTOP` freezing, and bounded `2MB` `/proc/[pid]/mem` C2 string extraction (skipping `[vvar]`, `[vdso]`, `[vsyscall]`).
 - **How to test:**
 
   ```bash
-  # Open two terminals
   # Terminal 1:
   deceptenv init
   deceptenv run
-  
+
   # Terminal 2:
-  cat ~/.aws/credentials.honey
+  python3 -c 'import time; open(".deceptenv_canaries/.env.honey", "rb").read(); time.sleep(10)' &
+  ps -eo pid,stat,cmd | grep python3
   ```
 
-### 🪟 Windows
+### 🪟 Windows (PowerShell)
 
-- **Canary Locations:**
+- **Default Canary Locations:**
   - AWS: `%USERPROFILE%\.aws\credentials.honey`
+  - Chrome: `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cookies.honey` (fallback `canary_directory`)
   - System: `%APPDATA%\Microsoft\Windows\deceptenv_config.ini.honey`
-- **Under the hood:** Uses `ReadDirectoryChangesW` for zero-overhead monitoring. Uses the powerful `NtSuspendProcess` undocumented API call to freeze the malware's threads without needing Administrator privileges.
+  - Workspace: `.deceptenv_canaries\.env.honey`
+- **Under the hood:** Uses `10ms` `st_atime_ns`/`st_mtime_ns` polling, Windows Restart Manager (`rstrtmgr.dll`) + Tier 2 attribution, `advapi32` SID ownership checks, and `ntdll.NtSuspendProcess` to suspend threads under Medium Integrity without Administrator elevation.
 - **How to test (PowerShell):**
 
   ```powershell
-  # Open two PowerShell windows
   # Window 1:
   deceptenv init
   deceptenv run
-  
+
   # Window 2:
-  Get-Content $env:USERPROFILE\.aws\credentials.honey
-  # The command will hang as the process is frozen!
+  $proc = Start-Process python -ArgumentList '-c', 'import time; open(".deceptenv_canaries/.env.honey", "rb").read(); time.sleep(10)' -PassThru
+  Start-Sleep -Milliseconds 500
+  (Get-Process -Id $proc.Id).Threads | Select-Object Id, ThreadState, WaitReason
   ```
 
 ---
 
-## 🚨 Slack Webhook Integration
+## ⚙️ Configuration, Web Auth & Slack Integration
 
-To receive live alerts when an attack is stopped:
+Config values can be placed in `./deceptenv.json`, `./.deceptenv.json`, or `~/.config/deceptenv/config.json`, or overridden via environment variables:
 
 ```bash
-# Set your webhook URL in your terminal
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+# Custom canary directory
+export DECEPTENV_CANARY_DIR="$PWD/.deceptenv_canaries"
 
-# Then run the engine
+# Optional Bearer token authentication for the Web Dashboard REST APIs
+export DECEPTENV_DASHBOARD_TOKEN="your-secret-bearer-token"
+deceptenv dashboard
+
+# Optional HTTPS Slack webhook alerts
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
 deceptenv run
 ```
