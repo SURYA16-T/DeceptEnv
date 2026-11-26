@@ -46,15 +46,17 @@ Each test spawns real child processes that perform genuine file reads (`open(...
 Executed in isolated temporary sandbox (`/var/folders/.../deceptenv_sim_*`):
 
 ```text
-[*] Deployed sandbox canary at .../canaries/.env.honey
+[*] Deployed sandbox canary: .../canaries/.env.honey (mode=0o600, sha256=3e256bf3eb823a22...)
 [*] Spawning real unmodified infostealer child process...
-[*] Monitor intercepted read on .env.honey -> froze PID 4509
+[*] Monitor intercepted read on .env.honey -> froze PID 4878
+[+] Scheduler State Verified: PID 4878 status='stopped' (SIGSTOP)
+[+] Mitigation Freeze Latency: 1.38ms (E2E spawn->frozen: 68.38ms)
 [+] Forensic Report Extracted:
 {
   "lineage": [
     {
-      "pid": 4509,
-      "ppid": 4508,
+      "pid": 4878,
+      "ppid": 4877,
       "name": "Python",
       "cmdline": [".../Python", ".../rogue_stealer.py"]
     },
@@ -65,8 +67,9 @@ Executed in isolated temporary sandbox (`/var/folders/.../deceptenv_sim_*`):
   "extracted_ips": [],
   "extracted_base64": []
 }
-[+] Scheduler freeze completed in 1.11ms
-[*] Verifying frozen process stays suspended for 2s...
+[*] Verifying frozen process remains suspended for 2s...
+[+] Freeze Persistence Verified: proc.poll()=None (still frozen)
+[+] Exfiltration Blocked: 'Exfiltration Complete' never reached.
 [+] SUCCESS: Real-read infostealer simulation completely neutralized.
 ```
 

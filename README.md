@@ -307,32 +307,36 @@ All outputs below were captured verbatim in this workspace under Python `3.9.6` 
 
 ### A. Live Real-Read Sandboxed Attacker Simulation (`tests/simulation/attack_simulator.py`)
 
-Spawns an unmodified rogue Python infostealer process that reads `.env.honey` (with **no** `os.utime()` helper) and attempts to sleep before printing `"Exfiltration Complete"`. `CanaryMonitor` intercepts the real file read, `ThreatMitigator` freezes the attacker with `SIGSTOP`, extracts process lineage, and blocks exfiltration:
+Spawns an unmodified rogue Python infostealer process that reads `.env.honey` (with **no** `os.utime()` helper) and attempts to sleep before printing `"Exfiltration Complete"`. `CanaryMonitor` intercepts the real file read, `ThreatMitigator` freezes the attacker with `SIGSTOP`, verifies scheduler `stopped` state and freeze persistence, extracts process lineage, and confirms exfiltration was blocked:
 
 ```bash
 .venv/bin/python tests/simulation/attack_simulator.py
+# Or using Makefile:
+make simulate
 ```
 
 ```text
-[*] Deployed sandbox canary at /private/var/folders/6f/8d5yx3510xz72h8vqkhmrfz00000gn/T/deceptenv_sim_yzcawr_m/canaries/.env.honey
+[*] Deployed sandbox canary: /private/var/folders/6f/8d5yx3510xz72h8vqkhmrfz00000gn/T/deceptenv_sim_3vhime1x/canaries/.env.honey (mode=0o600, sha256=3e256bf3eb823a22...)
 [*] Spawning real unmodified infostealer child process...
-PID attribution via heuristic fallback (Tier 2): PID 4664. Confidence: LOW — based on most-recently-spawned process within 5s window.
-Successfully suspended threat process: PID 4664
-[*] Monitor intercepted read on .env.honey -> froze PID 4664
+PID attribution via heuristic fallback (Tier 2): PID 4878. Confidence: LOW — based on most-recently-spawned process within 5s window.
+Successfully suspended threat process: PID 4878
+[*] Monitor intercepted read on .env.honey -> froze PID 4878
+[+] Scheduler State Verified: PID 4878 status='stopped' (SIGSTOP)
+[+] Mitigation Freeze Latency: 1.38ms (E2E spawn->frozen: 68.38ms)
 [+] Forensic Report Extracted:
 {
   "lineage": [
     {
-      "pid": 4664,
-      "ppid": 4663,
+      "pid": 4878,
+      "ppid": 4877,
       "name": "Python",
       "cmdline": [
         "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
-        "/var/folders/6f/8d5yx3510xz72h8vqkhmrfz00000gn/T/deceptenv_sim_yzcawr_m/rogue_stealer.py"
+        "/var/folders/6f/8d5yx3510xz72h8vqkhmrfz00000gn/T/deceptenv_sim_3vhime1x/rogue_stealer.py"
       ]
     },
     {
-      "pid": 4663,
+      "pid": 4877,
       "ppid": 3397,
       "name": "Python",
       "cmdline": [
@@ -347,8 +351,9 @@ Successfully suspended threat process: PID 4664
   "extracted_ips": [],
   "extracted_base64": []
 }
-[+] Scheduler freeze completed in 3.30ms
-[*] Verifying frozen process stays suspended for 2s...
+[*] Verifying frozen process remains suspended for 2s...
+[+] Freeze Persistence Verified: proc.poll()=None (still frozen)
+[+] Exfiltration Blocked: 'Exfiltration Complete' never reached.
 [+] SUCCESS: Real-read infostealer simulation completely neutralized.
 ```
 

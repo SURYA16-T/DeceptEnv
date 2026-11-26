@@ -32,12 +32,14 @@ async def run_simulation() -> None:
         # Deploy isolated canaries in sandbox
         env_path = deployer.deploy_env_file()
         registry.register(env_path)
+        meta = registry.get_canary_metadata(env_path)
+        mode_oct = oct(os.stat(env_path).st_mode & 0o777)
 
         forensics = ForensicsExtractor(config)
         mitigator = ThreatMitigator(forensics)
         monitor = CanaryMonitor(canary_dir, registry)
 
-        print(f"[*] Deployed sandbox canary at {env_path}")
+        print(f"[*] Deployed sandbox canary: {env_path} (mode={mode_oct}, sha256={str(meta['hash'])[:16]}...)")
 
         events: list[Tuple[int, Path, Optional[ForensicReport], float]] = []
 
@@ -66,6 +68,7 @@ if __name__ == "__main__":
 """
         script_path.write_text(script_content)
 
+        t_spawn = time.time()
         proc = subprocess.Popen(
             [sys.executable, str(script_path)],
             stdout=subprocess.PIPE,
@@ -86,20 +89,24 @@ if __name__ == "__main__":
                 await asyncio.sleep(0.05)
 
             assert events, "CanaryMonitor did not detect real canary read!"
+            e2e_ms = (time.time() - t_spawn) * 1000.0
             pid, tripped_path, report, freeze_ms = events[0]
             assert pid == proc.pid, f"Expected PID {proc.pid}, got {pid}"
             assert report is not None, (
                 "ThreatMitigator failed to generate a forensic report!"
             )
 
+            proc_state = psutil.Process(proc.pid).status()
+            assert proc_state == psutil.STATUS_STOPPED
             print(f"[*] Monitor intercepted read on {tripped_path.name} -> froze PID {pid}")
+            print(f"[+] Scheduler State Verified: PID {pid} status='{proc_state}' (SIGSTOP)")
+            print(f"[+] Mitigation Freeze Latency: {freeze_ms:.2f}ms (E2E spawn->frozen: {e2e_ms:.2f}ms)")
             print(f"[+] Forensic Report Extracted:\n{report.model_dump_json(indent=2)}")
-            print(f"[+] Scheduler freeze completed in {freeze_ms:.2f}ms")
 
-            assert psutil.Process(proc.pid).status() == psutil.STATUS_STOPPED
-            print("[*] Verifying frozen process stays suspended for 2s...")
+            print("[*] Verifying frozen process remains suspended for 2s...")
             await asyncio.sleep(2.0)
             assert proc.poll() is None, "Process terminated instead of staying frozen!"
+            print(f"[+] Freeze Persistence Verified: proc.poll()={proc.poll()} (still frozen)")
         finally:
             monitor_task.cancel()
             try:
@@ -119,6 +126,7 @@ if __name__ == "__main__":
             "Infostealer successfully completed exfiltration!"
         )
 
+        print("[+] Exfiltration Blocked: 'Exfiltration Complete' never reached.")
         print("[+] SUCCESS: Real-read infostealer simulation completely neutralized.")
 
 
