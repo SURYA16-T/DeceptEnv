@@ -110,3 +110,45 @@ def test_forensics_bounded_memory_read(tmp_path: Path) -> None:
                 extracted = forensics.dump_memory(pid)
                 # Should be exactly 1MB bounded
                 assert len(extracted) == 1048576
+
+
+def test_forensics_extract_lineage_with_mock() -> None:
+    config = SecurityConfig(canary_directory=Path("/tmp"))
+    forensics = ForensicsExtractor(config)
+
+    with patch.object(forensics.platform, "get_process_lineage", return_value=[]):
+        with patch("psutil.Process") as mock_proc_cls:
+            mock_proc = mock_proc_cls.return_value
+            mock_proc.pid = os.getpid()
+            mock_proc.ppid.return_value = os.getppid()
+            mock_proc.name.return_value = "python"
+            mock_proc.cmdline.return_value = ["python", "test.py"]
+            lineage = forensics.extract_lineage(os.getpid())
+            assert len(lineage) >= 1
+            assert lineage[0].name == "python"
+
+
+def test_forensics_capture_snapshot_handles_access_denied() -> None:
+    config = SecurityConfig(canary_directory=Path("/tmp"))
+    forensics = ForensicsExtractor(config)
+
+    import psutil
+
+    with patch.object(forensics.platform, "get_process_lineage", return_value=[]):
+        with patch("psutil.Process", side_effect=psutil.NoSuchProcess(99999)):
+            report = forensics.capture_snapshot(99999)
+            assert report.lineage == []
+            assert report.extracted_urls == []
+
+
+@pytest.mark.asyncio
+async def test_mitigator_rejects_invalid_pid() -> None:
+    config = SecurityConfig(canary_directory=Path("/tmp"))
+    forensics = ForensicsExtractor(config)
+    mitigator = ThreatMitigator(forensics)
+
+    result = await mitigator.freeze_threat(0)
+    assert result is None
+
+    result = await mitigator.freeze_threat(-1)
+    assert result is None

@@ -54,4 +54,4 @@ select = ["E", "F", "B", "S", "I"]
 ignore = ["E501", "S110", "S310", "E402", "F841"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S108", "S603", "E501"]
+"tests/*" = ["S101", "S105", "S106", "S108", "S603", "E501"]

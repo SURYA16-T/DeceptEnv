@@ -88,7 +88,7 @@ DeceptEnv operates entirely in user space by using platform-specific OS APIs:
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.9+
 - Linux, Windows 10/11, or macOS 13+
 
 ### Installation

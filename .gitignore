@@ -71,3 +71,10 @@ venv.bak/
 .deceptenv_canaries/
 .deceptenv_test_canaries/
 dummy_target/
+
+# Scratch / temporary test files
+scratch/
+test_atime.txt
+test_file.txt
+*.honey
+.deceptenv_hmac.key

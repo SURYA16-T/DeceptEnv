@@ -122,6 +122,23 @@ class CanaryDeployer:
             pass
         return final_path
 
+    def _get_deploy_key(self) -> bytes:
+        """Return a persistent HMAC key, creating one on first use."""
+        key_path = self.base_dir / ".deceptenv_hmac.key"
+        try:
+            if key_path.exists():
+                return key_path.read_bytes()
+        except OSError:
+            pass
+        key = secrets.token_bytes(32)
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            key_path.write_bytes(key)
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+        return key
+
     def deploy_aws_credentials(self) -> Path:
         """Create a synthetic AWS credentials file."""
         target_path = self.get_aws_credentials_path()
@@ -129,8 +146,8 @@ class CanaryDeployer:
         access_key = f"AKIA{secrets.token_hex(8).upper()}"
         secret_key = secrets.token_hex(20)
 
-        # Generate a per-deployment HMAC key for verification
-        hmac_key = secrets.token_bytes(32)
+        # Use persistent per-deployment HMAC key for verification
+        hmac_key = self._get_deploy_key()
         signature = hmac.new(
             hmac_key, access_key.encode(), "sha256"
         ).hexdigest()

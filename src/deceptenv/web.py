@@ -813,6 +813,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    def _check_auth(self) -> bool:
+        """Verify Bearer token when dashboard_auth_token is configured."""
+        config = _get_config()
+        token = config.dashboard_auth_token
+        if not token:
+            return True  # No token configured — open access
+        auth_header = self.headers.get("Authorization", "")
+        # Also allow module-level env override
+        expected = token or _AUTH_TOKEN
+        if not expected:
+            return True
+        if auth_header == f"Bearer {expected}":
+            return True
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        payload = json.dumps({"error": "Unauthorized"}).encode("utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+        return False
+
     def _send_json(self, data: Any, status: int = 200) -> None:
         payload = json.dumps(data).encode("utf-8")
         self.send_response(status)
@@ -833,6 +854,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._send_html(DASHBOARD_HTML)
         elif self.path == "/api/status":
+            if not self._check_auth():
+                return
             adapter = get_platform_adapter()
             canaries = get_canary_list()
             with _LOCK:
@@ -848,8 +871,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             self._send_json(data)
         elif self.path == "/api/canaries":
+            if not self._check_auth():
+                return
             self._send_json(get_canary_list())
         elif self.path == "/api/incidents":
+            if not self._check_auth():
+                return
             with _LOCK:
                 self._send_json(_STATE["incidents"])
         else:
@@ -868,6 +895,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self) -> None:
+        if not self._check_auth():
+            return
         if self.path == "/api/simulate":
             try:
                 res = execute_attack_simulation()

@@ -7,7 +7,7 @@ import pytest
 
 from deceptenv.canary.deployer import CanaryDeployer
 from deceptenv.canary.registry import CanaryRegistry
-from deceptenv.exceptions import SecurityBoundaryViolation
+from deceptenv.exceptions import CanaryRegistryCorruption, SecurityBoundaryViolation
 
 
 def test_canary_registry_thread_safety(tmp_path: Path) -> None:
@@ -155,3 +155,50 @@ def test_canary_deployer_generate_token(tmp_path: Path) -> None:
     token = deployer.generate_token()
     assert isinstance(token, str)
     assert len(token) == 64
+
+
+def test_canary_registry_get_metadata(tmp_path: Path) -> None:
+    registry = CanaryRegistry()
+    f = tmp_path / "meta_test.honey"
+    f.write_text("test content")
+    registry.register(f)
+
+    meta = registry.get_canary_metadata(f)
+    assert "hash" in meta
+    assert isinstance(meta["hash"], str)
+    assert len(meta["hash"]) == 64  # SHA-256 hex
+
+
+def test_canary_registry_get_metadata_unregistered(tmp_path: Path) -> None:
+    registry = CanaryRegistry()
+    f = tmp_path / "unregistered.honey"
+    f.write_text("dummy")
+    with pytest.raises(CanaryRegistryCorruption):
+        registry.get_canary_metadata(f)
+
+
+def test_canary_registry_unregister(tmp_path: Path) -> None:
+    registry = CanaryRegistry()
+    f = tmp_path / "unreg_test.honey"
+    f.write_text("dummy")
+    registry.register(f)
+    assert registry.is_canary(f)
+
+    registry.unregister(f)
+    assert not registry.is_canary(f)
+
+
+def test_canary_registry_unregister_nonexistent(tmp_path: Path) -> None:
+    registry = CanaryRegistry()
+    f = tmp_path / "ghost.honey"
+    f.write_text("dummy")
+    # Should not raise
+    registry.unregister(f)
+
+
+def test_canary_deployer_hmac_key_persistence(tmp_path: Path) -> None:
+    deployer = CanaryDeployer(tmp_path)
+    key1 = deployer._get_deploy_key()
+    key2 = deployer._get_deploy_key()
+    assert key1 == key2  # Must return same key on second call
+    assert len(key1) == 32
