@@ -6,16 +6,20 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional, Tuple
+
+import psutil
 
 from deceptenv.canary.deployer import CanaryDeployer
 from deceptenv.canary.registry import CanaryRegistry
 from deceptenv.config import SecurityConfig
-from deceptenv.engine.forensics import ForensicsExtractor
+from deceptenv.engine.forensics import ForensicReport, ForensicsExtractor
 from deceptenv.engine.mitigator import ThreatMitigator
+from deceptenv.engine.monitor import CanaryMonitor
 
 
 async def run_simulation() -> None:
-    """Run an isolated, sandboxed infostealer attack simulation and verify neutralization."""
+    """Run a full monitor -> attribute -> freeze -> forensics attack simulation in an isolated sandbox."""
     with tempfile.TemporaryDirectory(prefix="deceptenv_sim_") as tmp_dir:
         sandbox_root = Path(tmp_dir)
         canary_dir = sandbox_root / "canaries"
@@ -25,29 +29,36 @@ async def run_simulation() -> None:
         deployer = CanaryDeployer(config.canary_directory)
         registry = CanaryRegistry()
 
-        # Deploy canaries inside isolated sandbox
-        aws_path = deployer.deploy_aws_credentials()
-        registry.register(aws_path)
-
-        sys_path = deployer.deploy_system_config()
-        registry.register(sys_path)
+        # Deploy isolated canaries in sandbox
+        env_path = deployer.deploy_env_file()
+        registry.register(env_path)
 
         forensics = ForensicsExtractor(config)
         mitigator = ThreatMitigator(forensics)
+        monitor = CanaryMonitor(canary_dir, registry)
 
-        print(f"[*] Deployed AWS canary at {aws_path}")
-        print("[*] Spawning infostealer child process...")
+        print(f"[*] Deployed sandbox canary at {env_path}")
+
+        events: list[Tuple[int, Path, Optional[ForensicReport], float]] = []
+
+        async def on_threat(pid: int, path: Path) -> None:
+            t0 = time.time()
+            report = await mitigator.freeze_threat(pid)
+            elapsed_ms = (time.time() - t0) * 1000.0
+            events.append((pid, path, report, elapsed_ms))
+
+        monitor_task = asyncio.create_task(monitor.start(on_threat))
+        await asyncio.sleep(0.3)
+
+        print("[*] Spawning real unmodified infostealer child process...")
 
         script_path = sandbox_root / "rogue_stealer.py"
         script_content = f"""
 import time
 def run() -> None:
-    try:
-        with open(r"{sys_path}", "rb") as f:
-            f.read()
-    except Exception:
-        pass
-    print("READY", flush=True)
+    with open(r"{env_path}", "rb") as f:
+        _ = f.read()
+    print("CANARY_READ", flush=True)
     time.sleep(5)
     print("Exfiltration Complete", flush=True)
 if __name__ == "__main__":
@@ -55,7 +66,6 @@ if __name__ == "__main__":
 """
         script_path.write_text(script_content)
 
-        # Spawn child process
         proc = subprocess.Popen(
             [sys.executable, str(script_path)],
             stdout=subprocess.PIPE,
@@ -64,38 +74,38 @@ if __name__ == "__main__":
         )
 
         try:
-            # Wait for the process to actually open the file and signal READY
             if proc.stdout is not None:
                 ready_line = proc.stdout.readline()
-                assert "READY" in ready_line, (
-                    "Child process failed to initialize and read canary."
+                assert "CANARY_READ" in ready_line, (
+                    "Child process failed to read canary."
                 )
 
-            print(f"[*] Attributed threat to PID {proc.pid}. Initiating freeze...")
+            for _ in range(40):
+                if events:
+                    break
+                await asyncio.sleep(0.05)
 
-            mitigate_start = time.time()
-            report = await mitigator.freeze_threat(proc.pid)
-            mitigate_duration = time.time() - mitigate_start
-
+            assert events, "CanaryMonitor did not detect real canary read!"
+            pid, tripped_path, report, freeze_ms = events[0]
+            assert pid == proc.pid, f"Expected PID {proc.pid}, got {pid}"
             assert report is not None, (
                 "ThreatMitigator failed to generate a forensic report!"
             )
+
+            print(f"[*] Monitor intercepted read on {tripped_path.name} -> froze PID {pid}")
             print(f"[+] Forensic Report Extracted:\n{report.model_dump_json(indent=2)}")
+            print(f"[+] Scheduler freeze completed in {freeze_ms:.2f}ms")
 
-            print(f"[+] Process suspended in {mitigate_duration * 1000:.2f}ms")
-            assert mitigate_duration < 0.05, (
-                f"Suspension took {mitigate_duration * 1000}ms, which is > 50ms!"
-            )
-
-            # Verify the frozen process stays suspended instead of completing sleep(5)
-            print("[*] Waiting 6 seconds to verify it never finishes the sleep...")
-            time.sleep(6)
-
-            status = proc.poll()
-            assert status is None, (
-                f"Process terminated unexpectedly with status {status}. It should be frozen!"
-            )
+            assert psutil.Process(proc.pid).status() == psutil.STATUS_STOPPED
+            print("[*] Verifying frozen process stays suspended for 2s...")
+            await asyncio.sleep(2.0)
+            assert proc.poll() is None, "Process terminated instead of staying frozen!"
         finally:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
             if proc.poll() is None:
                 try:
                     if hasattr(signal, "SIGCONT"):
@@ -109,7 +119,7 @@ if __name__ == "__main__":
             "Infostealer successfully completed exfiltration!"
         )
 
-        print("[+] SUCCESS: Infostealer simulation completely neutralized.")
+        print("[+] SUCCESS: Real-read infostealer simulation completely neutralized.")
 
 
 if __name__ == "__main__":

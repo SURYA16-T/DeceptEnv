@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,4 +146,53 @@ def test_canary_paths_contract_across_all_adapters() -> None:
         assert "chrome_cookies" in paths
         assert "system_config" in paths
         assert "env_file" in paths
+
+
+def test_get_process_lineage_prevents_cycle() -> None:
+    adapter = DarwinAdapter()
+    proc_a = MagicMock()
+    proc_a.pid = 100
+    proc_b = MagicMock()
+    proc_b.pid = 200
+    proc_a.parent.return_value = proc_b
+    # Force a cycle back to 100
+    proc_b.parent.return_value = proc_a
+
+    with patch("psutil.Process", return_value=proc_a):
+        lineage = adapter.get_process_lineage(100)
+        assert lineage == [200]
+
+
+def test_darwin_tier2_skips_stopped_processes(tmp_path: Path) -> None:
+    import time
+
+    import psutil
+
+    adapter = DarwinAdapter()
+    canary = tmp_path / "test.honey"
+    canary.write_text("dummy")
+
+    stopped_proc = MagicMock()
+    stopped_proc.info = {
+        "pid": 55501,
+        "uids": MagicMock(real=501),
+        "create_time": time.time(),
+        "status": psutil.STATUS_STOPPED,
+    }
+    stopped_proc.open_files.return_value = []
+
+    live_proc = MagicMock()
+    live_proc.info = {
+        "pid": 55502,
+        "uids": MagicMock(real=501),
+        "create_time": time.time() - 1.0,
+        "status": psutil.STATUS_SLEEPING,
+    }
+    live_proc.open_files.return_value = []
+
+    with patch("os.getuid", return_value=501):
+        with patch.object(adapter, "get_process_lineage", return_value=[]):
+            with patch("psutil.process_iter", return_value=[stopped_proc, live_proc]):
+                pid = adapter.find_pid_accessing_file(canary)
+                assert pid == 55502
 

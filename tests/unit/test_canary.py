@@ -217,3 +217,24 @@ def test_canary_deployer_sandbox_fallback(
         CanaryDeployer.get_system_config_path(base_dir).parent == base_dir
     )
     assert CanaryDeployer.get_system_config_path(base_dir).name.endswith(".honey")
+
+
+def test_canary_deployer_rejects_symlink_targets(tmp_path: Path) -> None:
+    deployer = CanaryDeployer(tmp_path)
+    victim = tmp_path / "real_secret.txt"
+    victim.write_text("KEEP_ME_SAFE")
+
+    symlink_target = tmp_path / ".env.honey"
+    symlink_target.symlink_to(victim)
+
+    with pytest.raises(SecurityBoundaryViolation, match="symlink"):
+        deployer.deploy_env_file()
+    assert victim.read_text() == "KEEP_ME_SAFE"
+
+    cookie_link = tmp_path / "Cookies.honey"
+    cookie_link.symlink_to(victim)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(CanaryDeployer, "get_chrome_cookies_path", staticmethod(lambda _: cookie_link))
+        with pytest.raises(SecurityBoundaryViolation, match="symlink"):
+            deployer.deploy_chrome_cookies()
+    assert victim.read_text() == "KEEP_ME_SAFE"

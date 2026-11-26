@@ -202,17 +202,22 @@ class WindowsAdapter(PlatformAdapter):
         current_time = time.time()
 
         current_sid = self._get_current_user_sid()
-        for p in psutil.process_iter(["pid", "create_time"]):
+        excluded_pids = {os.getpid(), os.getppid(), *self.get_process_lineage(os.getpid())}
+        for p in psutil.process_iter(["pid", "create_time", "status"]):
             try:
                 pid = int(p.info.get("pid") or 0)
                 create_time = p.info.get("create_time")
+                status = p.info.get("status")
 
                 if not pid or not create_time:
                     continue
 
+                if status in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE):
+                    continue
+
                 if (
                     self.get_process_owner(pid) == current_sid
-                    and pid != os.getpid()
+                    and pid not in excluded_pids
                 ):
                     # If spawned within the last 5 seconds (fast-close evasion window)
                     if current_time - create_time < 5.0:

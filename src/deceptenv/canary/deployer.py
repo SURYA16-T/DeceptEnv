@@ -5,6 +5,7 @@ import os
 import secrets
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 from deceptenv.exceptions import SecurityBoundaryViolation
@@ -101,8 +102,22 @@ class CanaryDeployer:
         """Return the target path for synthetic .env file."""
         return base_dir / ".env.honey"
 
+    @staticmethod
+    def _arm_canary_timestamps(target_path: Path) -> None:
+        """Ensure st_atime < st_mtime so APFS/relatime always updates st_atime on first read."""
+        try:
+            st = os.stat(target_path)
+            os.utime(target_path, (st.st_mtime - 10.0, st.st_mtime))
+        except OSError:
+            pass
+
     def _safe_write(self, target_path: Path, content: bytes) -> Path:
-        """Safely write a file ensuring no overwrites of non-canary files and strict permissions."""
+        """Safely write a file ensuring no overwrites of non-canary files, symlink rejection, and strict permissions."""
+        if target_path.is_symlink():
+            raise SecurityBoundaryViolation(
+                f"Refusing to write canary through symlink: {target_path}"
+            )
+
         final_path = target_path
         try:
             if final_path.exists() and not final_path.name.endswith(".honey"):
@@ -113,7 +128,16 @@ class CanaryDeployer:
             final_path = self.base_dir / (
                 final_path.name if final_path.name.endswith(".honey") else final_path.name + ".honey"
             )
+            if final_path.is_symlink():
+                raise SecurityBoundaryViolation(
+                    f"Refusing to write canary through symlink: {final_path}"
+                ) from None
             final_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if final_path.is_symlink():
+            raise SecurityBoundaryViolation(
+                f"Refusing to overwrite symlink canary target: {final_path}"
+            )
 
         if final_path.exists():
             # If the canary already exists, safely overwrite in place
@@ -125,14 +149,19 @@ class CanaryDeployer:
                 with open(final_path, "xb") as f:
                     f.write(content)
             except FileExistsError:
+                if final_path.is_symlink():
+                    raise SecurityBoundaryViolation(
+                        f"Refusing to overwrite symlink canary target: {final_path}"
+                    ) from None
                 with open(final_path, "wb") as f:
                     f.write(content)
 
-        # Set restrictive permissions (600)
+        # Set restrictive permissions (600) and arm atime < mtime
         try:
             os.chmod(final_path, 0o600)
         except OSError:
             pass
+        self._arm_canary_timestamps(final_path)
         return final_path
 
     def _get_deploy_key(self) -> bytes:
@@ -189,8 +218,12 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
         return self._safe_write(target_path, content.encode())
 
     def deploy_chrome_cookies(self) -> Path:
-        """Create a plausible SQLite database mimicking Chrome cookies in the real profile dir if possible."""
+        """Create a plausible SQLite database mimicking Chrome cookies atomically with 0o600 permissions."""
         target_path = self.get_chrome_cookies_path(self.base_dir)
+        if target_path.is_symlink():
+            raise SecurityBoundaryViolation(
+                f"Refusing to write canary through symlink: {target_path}"
+            )
 
         # If the target directory does not exist and base_dir was used, verify security boundary
         if self.base_dir.resolve() in target_path.resolve().parents:
@@ -212,67 +245,80 @@ STRIPE_SECRET_KEY=sk_live_{secrets.token_hex(24)}
             if final_path.exists() and not final_path.name.endswith(".honey"):
                 final_path = final_path.with_name(final_path.name + ".honey")
             final_path.parent.mkdir(parents=True, exist_ok=True)
-            if final_path.exists():
-                final_path.unlink()
         except OSError:
             final_path = self.base_dir / "Cookies.honey"
             final_path.parent.mkdir(parents=True, exist_ok=True)
-            if final_path.exists():
-                final_path.unlink()
 
-        # Initialize SQLite DB matching Chromium schema (v130+)
-        with sqlite3.connect(final_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                CREATE TABLE cookies (
-                    creation_utc INTEGER NOT NULL,
-                    host_key TEXT NOT NULL,
-                    top_frame_site_key TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    encrypted_value BLOB NOT NULL,
-                    path TEXT NOT NULL,
-                    expires_utc INTEGER NOT NULL,
-                    is_secure INTEGER NOT NULL,
-                    is_httponly INTEGER NOT NULL,
-                    last_access_utc INTEGER NOT NULL,
-                    has_expires INTEGER NOT NULL,
-                    is_persistent INTEGER NOT NULL,
-                    priority INTEGER NOT NULL,
-                    samesite INTEGER NOT NULL,
-                    source_scheme INTEGER NOT NULL,
-                    source_port INTEGER NOT NULL,
-                    is_same_party INTEGER NOT NULL,
-                    last_update_utc INTEGER NOT NULL,
-                    UNIQUE (host_key, top_frame_site_key, name, path)
-                )
-            """
+        if final_path.is_symlink():
+            raise SecurityBoundaryViolation(
+                f"Refusing to overwrite symlink canary target: {final_path}"
             )
 
-            domains = [".google.com", ".github.com", ".binance.com"]
-            for domain in domains:
-                encrypted_blob = secrets.token_bytes(32)
+        # Populate SQLite DB in a private 0o600 temp file inside target directory, then swap atomically
+        with tempfile.NamedTemporaryFile(
+            dir=final_path.parent, prefix=".tmp_cookies_", suffix=".db", delete=False
+        ) as tf:
+            tmp_db_path = Path(tf.name)
+
+        try:
+            os.chmod(tmp_db_path, 0o600)
+            with sqlite3.connect(tmp_db_path) as conn:
+                cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO cookies (
-                        creation_utc, host_key, top_frame_site_key, name, value, 
-                        encrypted_value, path, expires_utc, is_secure, is_httponly, 
-                        last_access_utc, has_expires, is_persistent, priority, 
-                        samesite, source_scheme, source_port, is_same_party, last_update_utc
-                    ) VALUES (
-                        13350000000000000, ?, '', 'session', '', ?, '/', 13380000000000000, 
-                        1, 1, 13350000000000000, 1, 1, 1, 0, 2, 443, 0, 13350000000000000
+                    CREATE TABLE cookies (
+                        creation_utc INTEGER NOT NULL,
+                        host_key TEXT NOT NULL,
+                        top_frame_site_key TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        encrypted_value BLOB NOT NULL,
+                        path TEXT NOT NULL,
+                        expires_utc INTEGER NOT NULL,
+                        is_secure INTEGER NOT NULL,
+                        is_httponly INTEGER NOT NULL,
+                        last_access_utc INTEGER NOT NULL,
+                        has_expires INTEGER NOT NULL,
+                        is_persistent INTEGER NOT NULL,
+                        priority INTEGER NOT NULL,
+                        samesite INTEGER NOT NULL,
+                        source_scheme INTEGER NOT NULL,
+                        source_port INTEGER NOT NULL,
+                        is_same_party INTEGER NOT NULL,
+                        last_update_utc INTEGER NOT NULL,
+                        UNIQUE (host_key, top_frame_site_key, name, path)
                     )
-                """,
-                    (domain, encrypted_blob),
+                """
                 )
-            conn.commit()
+
+                domains = [".google.com", ".github.com", ".binance.com"]
+                for domain in domains:
+                    encrypted_blob = secrets.token_bytes(32)
+                    cursor.execute(
+                        """
+                        INSERT INTO cookies (
+                            creation_utc, host_key, top_frame_site_key, name, value, 
+                            encrypted_value, path, expires_utc, is_secure, is_httponly, 
+                            last_access_utc, has_expires, is_persistent, priority, 
+                            samesite, source_scheme, source_port, is_same_party, last_update_utc
+                        ) VALUES (
+                            13350000000000000, ?, '', 'session', '', ?, '/', 13380000000000000, 
+                            1, 1, 13350000000000000, 1, 1, 1, 0, 2, 443, 0, 13350000000000000
+                        )
+                    """,
+                        (domain, encrypted_blob),
+                    )
+                conn.commit()
+            os.replace(tmp_db_path, final_path)
+        finally:
+            if tmp_db_path.exists():
+                tmp_db_path.unlink(missing_ok=True)
 
         try:
             os.chmod(final_path, 0o600)
         except OSError:
             pass
+        self._arm_canary_timestamps(final_path)
         return final_path
 
     def deploy_system_config(self) -> Path:

@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -66,11 +67,12 @@ class SecurityConfig(BaseModel):
     @field_validator("slack_webhook_url")
     @classmethod
     def validate_webhook_url(cls, v: Optional[str]) -> Optional[str]:
-        """Validate that the Slack webhook URL is well-formed."""
+        """Validate that the Slack webhook URL is well-formed HTTPS."""
         if v is None:
             return v
-        if not v.startswith("https://"):
-            raise ValueError("Slack webhook URL must use HTTPS.")
+        parsed = urlparse(v)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("Slack webhook URL must use HTTPS with a valid host.")
         return v
 
 

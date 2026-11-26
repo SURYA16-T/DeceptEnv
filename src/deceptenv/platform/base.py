@@ -31,11 +31,13 @@ class PlatformAdapter(ABC):
         """Get the process tree lineage of a given PID."""
         import psutil
 
-        lineage = []
+        lineage: list[int] = []
+        seen: set[int] = {pid}
         try:
             proc = psutil.Process(pid)
             parent = proc.parent()
-            while parent:
+            while parent and parent.pid not in seen:
+                seen.add(parent.pid)
                 lineage.append(parent.pid)
                 parent = parent.parent()
         except (psutil.NoSuchProcess, psutil.AccessDenied):

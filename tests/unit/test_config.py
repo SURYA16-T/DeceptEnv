@@ -46,6 +46,11 @@ def test_config_webhook_url_requires_https() -> None:
             canary_directory=Path("/tmp"),
             slack_webhook_url="http://insecure.example.com",
         )
+    with pytest.raises(ValidationError, match="HTTPS"):
+        SecurityConfig(
+            canary_directory=Path("/tmp"),
+            slack_webhook_url="https://",
+        )
 
 
 def test_config_webhook_url_valid_https() -> None:

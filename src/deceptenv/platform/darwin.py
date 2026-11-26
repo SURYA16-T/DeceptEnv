@@ -71,16 +71,21 @@ class DarwinAdapter(PlatformAdapter):
         best_pid = None
         highest_time = 0.0
         current_time = time.time()
-        for p in psutil.process_iter(["pid", "uids", "create_time"]):
+        excluded_pids = {os.getpid(), os.getppid(), *self.get_process_lineage(os.getpid())}
+        for p in psutil.process_iter(["pid", "uids", "create_time", "status"]):
             try:
                 uids = p.info.get("uids")
                 pid = int(p.info.get("pid") or 0)
                 create_time = p.info.get("create_time")
+                status = p.info.get("status")
 
                 if not uids or not pid or not create_time:
                     continue
 
-                if uids.real == current_uid and pid != os.getpid():
+                if status in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE):
+                    continue
+
+                if uids.real == current_uid and pid not in excluded_pids:
                     # If spawned within the last 5 seconds (fast-close evasion window)
                     if current_time - create_time < 5.0:
                         if create_time > highest_time:

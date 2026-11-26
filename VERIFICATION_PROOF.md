@@ -23,39 +23,38 @@ pytest tests/ -v -s --cov=deceptenv --cov-report=term-missing --tb=short
 | :--- | :--- | :--- |
 | **Ruff Lint** | `src/` and `tests/` (`E`, `F`, `B`, `S`, `I`) | Passed (0 issues) |
 | **Mypy Strict** | 18 source files (`strict = true`) | Passed (0 issues) |
-| **Unit Tests** | `tests/unit/` (64 tests across canary, cli, config, engine, notifier, platform, web) | 64 passed |
-| **Sandboxed E2E Tests** | `tests/simulation/test_e2e.py` (4 live process tests) | 4 passed |
-| **Total Test Suite** | `pytest tests/` | **68 passed in 4.79s** |
-| **Code Coverage** | `src/deceptenv` (`--cov=deceptenv`) | **67%** overall (`config.py`: 100%, `registry.py`: 100%, `notifier.py`: 94%, `monitor.py`: 91%, `forensics.py`: 87%, `mitigator.py`: 85%, `darwin.py`: 83%) |
+| **Unit Tests** | `tests/unit/` (70 tests across canary, cli, config, engine, notifier, platform, web) | **70 passed** |
+| **Sandboxed E2E Tests** | `tests/simulation/test_e2e.py` (4 live real-read process tests) | **4 passed** |
+| **Total Test Suite** | `pytest tests/` | **74 passed in 3.60s** |
+| **Code Coverage** | `src/deceptenv` (`--cov=deceptenv`) | **66%** overall (`config.py`: 100%, `registry.py`: 100%, `notifier.py`: 94%, `forensics.py`: 92%, `monitor.py`: 90%, `mitigator.py`: 86%, `darwin.py`: 84%) |
 
 ---
 
-## 2. Sandboxed Attacker Neutralization Proof
+## 2. Genuine Real-Read Sandboxed Attacker Prevention Proof
 
-### A. Live E2E Monitor + Mitigator Benchmark (`tests/simulation/test_e2e.py`)
+### A. Real-Read E2E Monitor + Mitigator Suite (`tests/simulation/test_e2e.py`)
 
-Each simulation spawns a real subprocess inside an isolated `pytest` `tmp_path` sandbox:
+Each test spawns real child processes that perform genuine file reads (`open(...).read()`, with no `os.utime()` helper in the attacker):
 
-1. `test_end_to_end_neutralization` — Subprocess reads `credentials.honey`; `CanaryMonitor` detects `st_atime` transition, `DarwinAdapter` attributes caller PID, and `ThreatMitigator` issues `SIGSTOP` (`psutil.Process.status() == STATUS_STOPPED`). **PASSED**
-2. `test_negative_unrelated_file` — Subprocess reads non-canary `normal_file.txt`; engine ignores event and does not freeze process. **PASSED**
-3. `test_end_to_end_latency_benchmark` — End-to-end latency from process spawn to scheduler suspension (`SIGSTOP`): **170.89 ms** (<200 ms SLA). **PASSED**
-4. `test_sandboxed_attacker_exfiltration_blocked_with_forensics` — Subprocess infostealer (`attacker_payload.py`) reads `.env.honey`, engine freezes PID in scheduler (`STATUS_STOPPED`), extracts `ForensicReport` with process lineage, and blocks `EXFILTRATION_SUCCEEDED` output. **PASSED**
+1. `test_end_to_end_neutralization` — Child process reads `credentials.honey`; `CanaryMonitor` detects APFS `st_atime_ns` advance via `st_atime < st_mtime` arming, `DarwinAdapter` attributes PID, and `ThreatMitigator` freezes it (`STATUS_STOPPED`). **PASSED**
+2. `test_negative_unrelated_file` — Child process reads non-canary `normal_file.txt`; monitor ignores access and process continues uninterrupted. **PASSED**
+3. `test_end_to_end_latency_benchmark` — End-to-end real-read latency from spawn to scheduler suspension (`SIGSTOP`): **172.09 ms** (<200 ms SLA). **PASSED**
+4. `test_sandboxed_attacker_exfiltration_blocked_with_forensics` — Infostealer subprocess reads `.env.honey`, gets frozen (`STATUS_STOPPED`), yields `ForensicReport` lineage, blocks `"EXFILTRATION_SUCCEEDED"`, and a second consecutive attacker process is also intercepted and frozen via monitor re-arming. **PASSED**
 
-### B. Standalone Live Attacker Simulator (`tests/simulation/attack_simulator.py`)
+### B. Full Pipeline Live Attacker Simulator (`tests/simulation/attack_simulator.py`)
 
 Executed in isolated temporary sandbox (`/var/folders/.../deceptenv_sim_*`):
 
 ```text
-[*] Deployed AWS canary at .../canaries/credentials.honey
-[*] Spawning infostealer child process...
-[*] Attributed threat to PID 3937. Initiating freeze...
-Successfully suspended threat process: PID 3937
+[*] Deployed sandbox canary at .../canaries/.env.honey
+[*] Spawning real unmodified infostealer child process...
+[*] Monitor intercepted read on .env.honey -> froze PID 4509
 [+] Forensic Report Extracted:
 {
   "lineage": [
     {
-      "pid": 3937,
-      "ppid": 3936,
+      "pid": 4509,
+      "ppid": 4508,
       "name": "Python",
       "cmdline": [".../Python", ".../rogue_stealer.py"]
     },
@@ -66,18 +65,17 @@ Successfully suspended threat process: PID 3937
   "extracted_ips": [],
   "extracted_base64": []
 }
-[+] Process suspended in 1.25ms
-[*] Waiting 6 seconds to verify it never finishes the sleep...
-[+] SUCCESS: Infostealer simulation completely neutralized.
+[+] Scheduler freeze completed in 1.11ms
+[*] Verifying frozen process stays suspended for 2s...
+[+] SUCCESS: Real-read infostealer simulation completely neutralized.
 ```
 
 ---
 
-## 3. Zero-Privilege Sandbox Canary Deployment Proof
+## 3. Prevention & Hardening Regression Proofs
 
-Verified under Seatbelt sandbox where `~/Library/Application Support/Google/Chrome/Default` and `~/.aws` deny write access (`PermissionError`):
-
-- `deceptenv init` gracefully falls back to `DECEPTENV_CANARY_DIR` and deploys all 4 tripwires (`credentials.honey`, `Cookies.honey`, `.env.honey`, `com.apple.deceptenv.sys.plist.honey`) with `0o600` permissions.
-- `deceptenv list-canaries` lists all 4 deployed targets as `Active`.
-- Web Dashboard `get_canary_list()` reports all 4 targets with `"status": "ARMED"` and SHA-256 signatures.
-- `deceptenv clean` cleanly unlinks all 4 decoys.
+- **Symlink Overwrite Prevention (`test_canary_deployer_rejects_symlink_targets`):** `CanaryDeployer` rejects symlink canary targets (`SecurityBoundaryViolation`) before touching victim files.
+- **Atomic `0o600` SQLite Canary Creation (`deploy_chrome_cookies`):** Populates SQLite database in a private `0o600` temporary file and swaps atomically via `os.replace()`.
+- **Self/Shell/Ancestor Guard (`test_mitigator_blocks_ancestor_pid`):** `ThreatMitigator` rejects self PID, `ppid`, and full ancestor lineage, plus lazily creates `asyncio.Lock` safely on Python 3.9 sync initialization.
+- **Tier 2 Heuristic Exclusion (`test_darwin_tier2_skips_stopped_processes`):** Skips `STATUS_STOPPED`/`STATUS_ZOMBIE` and ancestor PIDs so frozen threats never mask new processes.
+- **Forensic Memory & C2 URL Extraction (`test_forensics_capture_snapshot_extracts_iocs`):** Skips kernel `[vvar]`/`[vdso]`/`[vsyscall]` pages, isolates per-region read errors, and extracts full HTTP(S) URLs with paths and query parameters (`https://evil-c2.example/exfil?id=1`), IPv4s, and Base64 payloads.

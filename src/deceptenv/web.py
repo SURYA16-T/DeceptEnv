@@ -30,11 +30,13 @@ from deceptenv.canary.registry import CanaryRegistry
 from deceptenv.config import SecurityConfig, load_config
 from deceptenv.engine.forensics import ForensicsExtractor
 from deceptenv.engine.mitigator import ThreatMitigator
+from deceptenv.exceptions import CanaryRegistryCorruption
 from deceptenv.platform import get_platform_adapter
 
 logger = logging.getLogger("deceptenv.web")
 
 _AUTH_TOKEN: str | None = os.environ.get("DECEPTENV_DASHBOARD_TOKEN")
+psutil.cpu_percent(interval=None)  # Warm up baseline CPU delta measurement
 
 # In-memory shared state for the Web Dashboard
 _STATE: dict[str, Any] = {
@@ -116,9 +118,16 @@ def get_canary_list() -> list[dict[str, Any]]:
 def execute_attack_simulation() -> dict[str, Any]:
     """Execute a live infostealer attack simulation and capture the mitigation."""
     import asyncio
+    import signal
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    proc: subprocess.Popen[str] | None = None
+    script_path: Path | None = None
+    report = None
+    canary_path: Path | None = None
+    duration_ms = 0.0
+
     try:
         config = _get_config()
         deployer = CanaryDeployer(config.canary_directory)
@@ -132,12 +141,10 @@ def execute_attack_simulation() -> dict[str, Any]:
             mode="w", suffix=".py", prefix="deceptenv_sim_", delete=False
         ) as tf:
             tf.write(f"""
-import time, os
+import time
 try:
     with open(r"{canary_path}", "rb") as f:
         _ = f.read()
-    now = time.time()
-    os.utime(r"{canary_path}", (now, now))
 except Exception:
     pass
 print("READY", flush=True)
@@ -161,24 +168,40 @@ print("EXFILTRATED", flush=True)
         duration_ms = round((time.time() - t0) * 1000, 2)
     finally:
         loop.close()
-        if 'script_path' in locals() and script_path.exists():
-            script_path.unlink(missing_ok=True)
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    if hasattr(signal, "SIGCONT"):
+                        try:
+                            os.kill(proc.pid, signal.SIGCONT)
+                        except OSError:
+                            pass
+                    proc.kill()
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+        if script_path is not None:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
+    pid = proc.pid if proc is not None else -1
     with _LOCK:
         _STATE["events_processed"] += 1
-        if report:
+        if report and proc is not None:
             _STATE["threats_neutralized"] += 1
             proc_name = "Python (Simulated Infostealer)"
             try:
-                proc_name = psutil.Process(proc.pid).name()
+                proc_name = psutil.Process(pid).name()
             except Exception:
                 pass
-            _STATE["last_threat"] = f"PID {proc.pid} ({proc_name})"
+            _STATE["last_threat"] = f"PID {pid} ({proc_name})"
             _STATE["avg_mitigation_ms"] = duration_ms
 
             incident_record = {
                 "timestamp": time.strftime("%H:%M:%S"),
-                "pid": proc.pid,
+                "pid": pid,
                 "target": str(canary_path),
                 "latency_ms": duration_ms,
                 "status": "NEUTRALIZED",
@@ -188,16 +211,9 @@ print("EXFILTRATED", flush=True)
             }
             _STATE["incidents"].insert(0, incident_record)
 
-    # Cleanup test process
-    try:
-        proc.kill()
-        proc.wait(timeout=1)
-    except Exception:
-        pass
-
     return {
         "success": True,
-        "pid": proc.pid,
+        "pid": pid,
         "latency_ms": duration_ms,
         "incident": _STATE["incidents"][0] if _STATE["incidents"] else None,
     }
@@ -905,10 +921,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-        else:
+        elif self.path in ("/api/status", "/api/canaries", "/api/incidents"):
+            if not self._check_auth():
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
+        else:
+            self.send_error(404, "Endpoint not found")
 
     def do_POST(self) -> None:
         if not self._check_auth():
@@ -921,14 +941,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(e)}, status=500)
         elif self.path == "/api/init":
             try:
-                config = load_config()
+                config = _get_config()
                 deployer = CanaryDeployer(config.canary_directory)
                 registry = CanaryRegistry()
-                deployer.deploy_env_file()
-                deployer.deploy_aws_credentials()
-                deployer.deploy_chrome_cookies()
-                deployer.deploy_system_config()
-                self._send_json({"success": True, "message": "Canaries deployed successfully."})
+                deployed = [
+                    deployer.deploy_env_file(),
+                    deployer.deploy_aws_credentials(),
+                    deployer.deploy_chrome_cookies(),
+                    deployer.deploy_system_config(),
+                ]
+                for p in deployed:
+                    try:
+                        registry.register(p)
+                    except (CanaryRegistryCorruption, OSError):
+                        pass
+                self._send_json({"success": True, "message": f"Deployed {len(deployed)} canaries successfully."})
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, status=500)
         elif self.path == "/api/clean":

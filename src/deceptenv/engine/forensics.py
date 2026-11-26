@@ -35,7 +35,7 @@ class ForensicReport(BaseModel):
 class ForensicsExtractor:
     """Bounded, safe extraction of process information to prevent DoS."""
 
-    URL_REGEX = re.compile(rb"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+")
+    URL_REGEX = re.compile(rb"https?://(?:[-\w.:@/?#=&+~!$,;]|(?:%[\da-fA-F]{2}))+")
     IP_REGEX = re.compile(rb"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b")
     B64_REGEX = re.compile(
         rb"(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?"
@@ -71,10 +71,14 @@ class ForensicsExtractor:
                 for line in f:
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].startswith("r"):
+                        # Skip special kernel virtual pages that raise EIO on read
+                        if len(parts) >= 6 and parts[5] in ("[vvar]", "[vdso]", "[vsyscall]"):
+                            continue
                         addr_range = parts[0].split("-")
                         start = int(addr_range[0], 16)
                         end = int(addr_range[1], 16)
-                        regions.append((start, end))
+                        if end > start:
+                            regions.append((start, end))
 
             with open(mem_path, "rb") as mem_file:
                 for start, end in regions:
@@ -82,9 +86,13 @@ class ForensicsExtractor:
                         break
 
                     size_to_read = min(end - start, max_bytes - len(mem_buffer))
-                    mem_file.seek(start)
-                    chunk = mem_file.read(size_to_read)
-                    mem_buffer.extend(chunk)
+                    try:
+                        mem_file.seek(start)
+                        chunk = mem_file.read(size_to_read)
+                        if chunk:
+                            mem_buffer.extend(chunk)
+                    except (OSError, ValueError):
+                        continue
 
         except (PermissionError, IOError, OSError, ProcessLookupError) as e:
             logger.debug(f"Failed to read memory for PID {pid}: {e}")

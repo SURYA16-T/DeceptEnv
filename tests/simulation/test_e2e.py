@@ -20,24 +20,20 @@ from deceptenv.engine.monitor import CanaryMonitor
 
 
 def infostealer_simulation(canary_path: str) -> None:
-    """Simulates an infostealer rapidly reading a credential file."""
+    """Simulates a real infostealer reading a credential file without touching timestamps."""
     try:
         with open(canary_path, "r") as f:
-            f.read()
-        current_time = time.time()
-        os.utime(canary_path, (current_time, current_time))
+            _ = f.read()
     except Exception:
         pass  # noqa: S110
     time.sleep(5)
 
 
 def negative_unrelated_file_simulation(file_path: str) -> None:
-    """Simulates reading a file that is not a canary."""
+    """Simulates reading a non-canary file."""
     try:
         with open(file_path, "r") as f:
-            f.read()
-        current_time = time.time()
-        os.utime(file_path, (current_time, current_time))
+            _ = f.read()
     except Exception:
         pass  # noqa: S110
     time.sleep(1)
@@ -49,8 +45,6 @@ async def setup_test_env(tmp_path: Path) -> Tuple[Any, ...]:
     with open(canary_file, "w") as f:
         f.write("aws_access_key_id=AKIA1234567890\naws_secret_access_key=1234567890\n")
 
-    past_time = time.time() - 86400 * 2
-    os.utime(canary_file, (past_time, past_time))
     registry.register(canary_file)
 
     config = SecurityConfig(canary_directory=tmp_path)
@@ -63,7 +57,7 @@ async def setup_test_env(tmp_path: Path) -> Tuple[Any, ...]:
 
 @pytest.mark.asyncio
 async def test_end_to_end_neutralization(tmp_path: Path) -> None:
-    """Verifies that reading a canary triggers immediate suspension."""
+    """Verifies that a natural read (no utime helper) of a canary triggers immediate SIGSTOP."""
     registry, canary_file, mitigator, monitor = await setup_test_env(tmp_path)
 
     async def mitigator_wrapper(pid: int, path: Path) -> None:
@@ -78,7 +72,13 @@ async def test_end_to_end_neutralization(tmp_path: Path) -> None:
     assert p.pid is not None
     child_pid = p.pid
 
-    await asyncio.sleep(1.0)
+    for _ in range(40):
+        try:
+            if psutil.Process(child_pid).status() == psutil.STATUS_STOPPED:
+                break
+        except psutil.NoSuchProcess:
+            break
+        await asyncio.sleep(0.05)
 
     try:
         process = psutil.Process(child_pid)
@@ -121,7 +121,7 @@ async def test_negative_unrelated_file(tmp_path: Path) -> None:
     assert p.pid is not None
     child_pid = p.pid
 
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.6)
 
     try:
         assert child_pid not in mitigated_pids
@@ -135,7 +135,7 @@ async def test_negative_unrelated_file(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_end_to_end_latency_benchmark(tmp_path: Path) -> None:
-    """Measures latency of access, telemetry, attribution, and suspension."""
+    """Measures real-read latency of access, telemetry, attribution, and suspension."""
     registry, canary_file, mitigator, monitor = await setup_test_env(tmp_path)
 
     latencies: List[Tuple[float, float]] = []
@@ -154,7 +154,7 @@ async def test_end_to_end_latency_benchmark(tmp_path: Path) -> None:
     p.start()
     child_pid = p.pid
 
-    for _ in range(30):
+    for _ in range(40):
         if latencies:
             break
         await asyncio.sleep(0.05)
@@ -180,15 +180,11 @@ async def test_end_to_end_latency_benchmark(tmp_path: Path) -> None:
 async def test_sandboxed_attacker_exfiltration_blocked_with_forensics(
     tmp_path: Path,
 ) -> None:
-    """Full sandbox proof: infostealer reads canary, gets frozen, forensics captured, exfiltration blocked."""
+    """Full sandbox proof: real read without utime gets frozen, forensics captured, exfiltration blocked."""
     canary_dir = tmp_path / "sandbox_canaries"
     canary_dir.mkdir(parents=True, exist_ok=True)
     deployer = CanaryDeployer(canary_dir)
     env_canary = deployer.deploy_env_file()
-
-    # Backdate atime so first read strictly advances st_atime
-    past_time = time.time() - 86400 * 2
-    os.utime(env_canary, (past_time, past_time))
 
     registry = CanaryRegistry()
     registry.register(env_canary)
@@ -207,15 +203,14 @@ async def test_sandboxed_attacker_exfiltration_blocked_with_forensics(
     monitor_task = asyncio.create_task(monitor.start(mitigator_wrapper))
     await asyncio.sleep(0.4)
 
+    # Genuine attacker payload: ONLY reads the canary file (no utime manipulation)
     attacker_script = tmp_path / "attacker_payload.py"
     attacker_script.write_text(
         f"""
-import os, time
+import time
 target = r"{env_canary}"
 with open(target, "rb") as f:
     stolen = f.read()
-now = time.time()
-os.utime(target, (now, now))
 print("CANARY_READ:" + str(len(stolen)), flush=True)
 time.sleep(5)
 print("EXFILTRATION_SUCCEEDED", flush=True)
@@ -239,7 +234,7 @@ print("EXFILTRATION_SUCCEEDED", flush=True)
                 break
             await asyncio.sleep(0.05)
 
-        assert captured_reports, "Attacker read of .env.honey was not intercepted!"
+        assert captured_reports, "Real read of .env.honey was not intercepted!"
         mitigated_pid, tripped_path, report = captured_reports[0]
         assert mitigated_pid == proc.pid
         assert tripped_path.resolve() == env_canary.resolve()
@@ -252,7 +247,34 @@ print("EXFILTRATION_SUCCEEDED", flush=True)
         assert ps_proc.status() == psutil.STATUS_STOPPED
         assert proc.poll() is None
 
-        # Kill frozen process and verify exfiltration never ran
+        # Verify a second consecutive natural read after debounce is ALSO caught cleanly
+        monitor.debouncer.clear()
+        attacker2 = subprocess.Popen(
+            [sys.executable, str(attacker_script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            if attacker2.stdout:
+                _ = attacker2.stdout.readline()
+            for _ in range(40):
+                if len(captured_reports) >= 2:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(captured_reports) >= 2, "Second natural read was missed!"
+            assert captured_reports[1][0] == attacker2.pid
+            assert psutil.Process(attacker2.pid).status() == psutil.STATUS_STOPPED
+        finally:
+            if attacker2.poll() is None:
+                try:
+                    os.kill(attacker2.pid, signal.SIGCONT)
+                except OSError:
+                    pass  # noqa: S110
+                attacker2.kill()
+                attacker2.wait(timeout=2)
+
+        # Kill frozen process #1 and verify exfiltration never ran
         os.kill(proc.pid, signal.SIGCONT)
         proc.kill()
         stdout_rest, _ = proc.communicate(timeout=2)
@@ -260,9 +282,9 @@ print("EXFILTRATION_SUCCEEDED", flush=True)
     finally:
         monitor_task.cancel()
         try:
-            monitor_task.exception()
-        except Exception:
-            pass  # noqa: S110
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
         if proc.poll() is None:
             try:
                 os.kill(proc.pid, signal.SIGCONT)

@@ -14,7 +14,7 @@ from deceptenv.engine.forensics import ForensicsExtractor
 from deceptenv.engine.mitigator import ThreatMitigator
 from deceptenv.engine.monitor import CanaryMonitor
 from deceptenv.engine.notifier import SlackNotifier
-from deceptenv.exceptions import CanaryRegistryCorruption
+from deceptenv.exceptions import CanaryRegistryCorruption, OSPrimitiveError
 
 app = typer.Typer(help="DeceptEnv: Active Deception Engine")
 console = Console()
@@ -217,7 +217,12 @@ async def async_run() -> None:
         console.print(
             f"\n[bold red]ALERT: Tripwire {path} triggered by PID {pid}![/bold red]"
         )
-        report = await mitigator.freeze_threat(pid)
+        try:
+            report = await mitigator.freeze_threat(pid)
+        except OSPrimitiveError as e:
+            console.print(f"[bold red]Mitigation error for PID {pid}: {e}[/bold red]")
+            return
+
         if report:
             state["threats"] += 1
             state["last_threat"] = f"PID {pid}"
@@ -252,6 +257,10 @@ async def async_run() -> None:
         await asyncio.gather(ui_task, monitor_task)
     except asyncio.CancelledError:
         pass
+    finally:
+        ui_task.cancel()
+        monitor_task.cancel()
+        await asyncio.gather(ui_task, monitor_task, return_exceptions=True)
 
 
 @app.command()

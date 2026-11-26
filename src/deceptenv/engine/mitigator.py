@@ -16,7 +16,13 @@ class ThreatMitigator:
     def __init__(self, forensics: ForensicsExtractor) -> None:
         self.platform = get_platform_adapter()
         self.forensics = forensics
-        self._action_lock = asyncio.Lock()
+        self._action_lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Lazily create the asyncio.Lock inside a running event loop (Python 3.9 safe)."""
+        if self._action_lock is None:
+            self._action_lock = asyncio.Lock()
+        return self._action_lock
 
     async def freeze_threat(self, pid: int) -> Optional[ForensicReport]:
         """Safely suspend a process ensuring atomic checks where possible."""
@@ -24,13 +30,13 @@ class ThreatMitigator:
             logger.error("Invalid PID received by mitigator.")
             return None
 
-        # Self-harm prevention checks
+        # Self-harm prevention checks (self, parent shell, and ancestor chain)
         if pid == os.getpid():
             logger.error("Attempted to mitigate DeceptEnv itself. Aborting.")
             return None
 
-        if pid == os.getppid():
-            logger.error("Attempted to mitigate parent shell. Aborting.")
+        if pid == os.getppid() or pid in self.platform.get_process_lineage(os.getpid()):
+            logger.error("Attempted to mitigate parent shell or ancestor process. Aborting.")
             return None
 
         # Check UID ownership
@@ -51,7 +57,7 @@ class ThreatMitigator:
             return None
 
         # Acquire lock to prevent concurrent mitigations stepping on each other
-        async with self._action_lock:
+        async with self._get_lock():
             try:
                 # We attempt to suspend immediately to stop the threat
                 success = self.platform.freeze_pid(pid)

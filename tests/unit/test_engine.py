@@ -152,3 +152,63 @@ async def test_mitigator_rejects_invalid_pid() -> None:
 
     result = await mitigator.freeze_threat(-1)
     assert result is None
+
+
+def test_mitigator_sync_instantiation_safe() -> None:
+    """ThreatMitigator.__init__ must succeed cleanly outside an event loop (Python 3.9)."""
+    config = SecurityConfig(canary_directory=Path("/tmp"))
+    forensics = ForensicsExtractor(config)
+    mitigator = ThreatMitigator(forensics)
+    assert mitigator._action_lock is None
+
+
+@pytest.mark.asyncio
+async def test_mitigator_blocks_ancestor_pid() -> None:
+    config = SecurityConfig(canary_directory=Path("/tmp"))
+    forensics = ForensicsExtractor(config)
+    mitigator = ThreatMitigator(forensics)
+    with patch.object(mitigator.platform, "get_process_lineage", return_value=[4242, 1]):
+        assert await mitigator.freeze_threat(4242) is None
+
+
+def test_forensics_capture_snapshot_extracts_iocs(tmp_path: Path) -> None:
+    config = SecurityConfig(canary_directory=tmp_path)
+    forensics = ForensicsExtractor(config)
+
+    # Construct a realistic memory payload with URL, IPv4, and long base64
+    b64_sample = b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5"
+    payload = (
+        b"prefix https://evil-c2.example/exfil?id=1 192.168.100.55 "
+        + b64_sample
+        + b" end"
+    )
+
+    maps_file = tmp_path / "maps"
+    mem_file = tmp_path / "mem"
+    mem_file.write_bytes(payload)
+    # Include both a skipped [vvar] entry and our readable heap slice
+    maps_file.write_text(
+        "ffffffffff000000-ffffffffff001000 r--p 00000000 00:00 0 [vvar]\n"
+        f"00000000-{len(payload):x} rw-p 00000000 00:00 0 [heap]\n"
+    )
+
+    with patch.object(forensics, "extract_lineage", return_value=[]):
+        with patch("psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.net_connections.return_value = []
+            with patch("os.name", "posix"):
+                with patch("os.path.exists", return_value=True):
+                    original_open = open
+
+                    def mock_open(path: str, mode: str = "r", *a: Any, **kw: Any) -> Any:
+                        if str(path).endswith("/maps"):
+                            return original_open(maps_file, mode, *a, **kw)
+                        if str(path).endswith("/mem"):
+                            return original_open(mem_file, mode, *a, **kw)
+                        return original_open(path, mode, *a, **kw)
+
+                    with patch("builtins.open", side_effect=mock_open):
+                        report = forensics.capture_snapshot(9999)
+
+    assert "https://evil-c2.example/exfil?id=1" in report.extracted_urls
+    assert "192.168.100.55" in report.extracted_ips
+    assert b64_sample.decode("ascii") in report.extracted_base64
